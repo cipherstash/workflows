@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Runs every saved case through the request decision and compares the result with the expected decision.
+#
+# Each case is a directory under request-decision/cases/ holding:
+#   input.json     the decision's input: {"event_name": ..., "event": <payload>}
+#   expected.json  the decision expected for that input
+#
+# Exits non-zero if any case fails. Needs only bash and jq.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cases_dir="$here/cases"
+
+total=0
+failed=0
+shopt -s nullglob
+for case_dir in "$cases_dir"/*/; do
+  name="$(basename "$case_dir")"
+  total=$((total + 1))
+  if ! actual="$("$here/decide" <"$case_dir/input.json" | jq --sort-keys .)"; then
+    echo "FAIL $name: the decision exited with an error"
+    failed=$((failed + 1))
+    continue
+  fi
+  expected="$(jq --sort-keys . "$case_dir/expected.json")"
+  if [[ "$actual" == "$expected" ]]; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name"
+    diff <(echo "$expected") <(echo "$actual") | sed 's/^/     /' || true
+    failed=$((failed + 1))
+  fi
+done
+
+echo "$total cases, $failed failed"
+[[ "$failed" -eq 0 ]]

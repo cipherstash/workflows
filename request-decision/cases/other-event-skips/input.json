@@ -1,0 +1,8 @@
+{
+  "event_name": "issues",
+  "event": {
+    "action": "opened",
+    "issue": {"number": 1, "title": "Not a pull request"},
+    "sender": {"login": "octocat", "type": "User"}
+  }
+}
