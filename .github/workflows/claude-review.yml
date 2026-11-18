@@ -624,6 +624,7 @@ jobs:
       issues: write
     steps:
       - name: React to the comment
+        id: reaction
         # A missing reaction is cosmetic: it shows as a warning, never as a red check.
         continue-on-error: true
         env:

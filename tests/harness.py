@@ -28,7 +28,9 @@ WORKFLOW = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflo
 # The shell a Python step names, so the runner runs its script with python3.
 PYTHON_SHELL = "python3 {0}"
 
-RUNNER_VARIABLES = {"GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_API_URL", "RUNNER_TEMP", "PATH", "LC_ALL"}
+RUNNER_VARIABLES = {
+    "GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_API_URL", "GITHUB_REPOSITORY", "RUNNER_TEMP", "PATH", "LC_ALL"
+}
 
 
 def _yq(query):
@@ -54,6 +56,10 @@ class StepResult:
     def errors(self):
         """The messages of the ::error:: annotations the step printed."""
         return [line[len("::error::"):] for line in self.stdout.splitlines() if line.startswith("::error::")]
+
+    def warnings(self):
+        """The messages of the ::warning:: annotations the step printed."""
+        return [line[len("::warning::"):] for line in self.stdout.splitlines() if line.startswith("::warning::")]
 
     def everything(self):
         """All the text the step produced, for checking that a secret appears nowhere."""
@@ -112,7 +118,8 @@ def step_env_names(job, step_id):
     return frozenset(_yq(_step_query(job, step_id) + " | (.env // {}) | keys | .[]").split())
 
 
-def run_step(job, step_id, env, api_url="http://127.0.0.1:9", substitutions=None, timeout=20):
+def run_step(job, step_id, env, api_url="http://127.0.0.1:9", repository="cipherstash/example", substitutions=None,
+             timeout=20):
     """Runs the step with only the given env (plus the runner's own variables) and returns a StepResult.
 
     substitutions maps text in the script to its replacement, such as a timeout constant lowered for a test. Each
@@ -154,6 +161,7 @@ def run_step(job, step_id, env, api_url="http://127.0.0.1:9", substitutions=None
             "GITHUB_OUTPUT": str(output_path),
             "GITHUB_STEP_SUMMARY": str(summary_path),
             "GITHUB_API_URL": api_url,
+            "GITHUB_REPOSITORY": repository,
             "RUNNER_TEMP": str(runner_temp),
             **env,
         }
