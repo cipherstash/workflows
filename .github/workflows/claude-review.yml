@@ -5,7 +5,7 @@
 # the calling repository, so everything it needs is in this file: the request decision's jq program is the decide job's
 # REQUEST_DECISION variable, and request-decision/test runs this same program against saved cases.
 #
-# Kinds of review request handled so far:
+# Kinds of review request:
 #   Ready: a non-draft pull request opened or reopened, or a draft marked ready for review. Drafts, bots' pull requests,
 #     forks and deleted forks are skipped, and so is a pull request whose author is not a team member. A pull request
 #     opened by the review agent is reviewed without a membership lookup.
@@ -13,6 +13,9 @@
 #     and forks too. The rest of the comment is passed on as instructions, and the comment gets a 👀 reaction once the
 #     request is sent. Comments by bots and by the review agent are skipped without a lookup, and so are commands on
 #     closed or merged pull requests.
+#   Requested reviewer: a team member requests a review from the review agent in a pull request's Reviewers box, on
+#     drafts too. Requests for anyone else or for a team are skipped, as are requests made by bots or the review agent
+#     (without a lookup), and requests on closed pull requests or forks.
 name: Claude review
 
 on:
@@ -27,7 +30,7 @@ on:
         type: string
         default: developers
       review-agent:
-        description: The login of the review agent, the account mentioned in a comment command, whose pull requests are reviewed without a membership lookup and whose comments never request a review.
+        description: The login of the review agent, the account mentioned in a comment command or requested as a reviewer, whose pull requests are reviewed without a membership lookup and whose comments and reviewer requests never request a review.
         type: string
         default: cipherstash-agent
     secrets:
@@ -63,6 +66,8 @@ jobs:
       #    "react": false, "text": "…"}
       #   {"decision": "fire", "kind": "comment-command", "requester": "<login>", "pull_request": {…}, "comment_id": N,
       #    "instructions": "…" or null, "react": true, "text": "…"}
+      #   {"decision": "fire", "kind": "requested-reviewer", "requester": "<login>", "pull_request": {…}, "react": false,
+      #    "text": "…"}
       REQUEST_DECISION: |
         def skip($reason): {decision: "skip", reason: $reason};
 
@@ -165,8 +170,40 @@ jobs:
             else gate($comment.user.login; $fire)
             end;
 
+        # Requested reviewer: the review agent requested, as a user, in a pull request's Reviewers box. A request for any
+        # other user, or for a team (the payload then has requested_team and no requested_reviewer), is not one. The
+        # requester is the person who made the request, the event's sender; the payload has no author_association for
+        # them. Drafts are reviewed, because asking is explicit. A closed pull request is not, as for comment commands.
+        # A fork's pull_request events get none of the repository's secrets, so the membership lookup could never
+        # succeed: forks are skipped before it. Requests made by bots and by the review agent are skipped before any
+        # lookup, so automation cannot start a review.
+        def requested_reviewer:
+          .event.pull_request as $pr
+          | .event.repository.full_name as $event_repo
+          | .event.sender as $sender
+          | (
+              {
+                decision: "fire",
+                kind: "requested-reviewer",
+                requester: $sender.login,
+                pull_request: {number: $pr.number, url: $pr.html_url},
+                react: false
+              }
+              | .text = "Review pull request #\($pr.number) in \($event_repo): \($pr.html_url)\n\nKind of review request: \(.kind)."
+            ) as $fire
+          | if is_review_agent(.event.requested_reviewer.login) | not then skip("not-a-review-request")
+            elif $pr.state == "closed" then skip("closed")
+            elif $pr.head.repo == null or $pr.head.repo.full_name != $pr.base.repo.full_name then skip("fork")
+            elif $sender == null then skip("not-a-review-request")
+            elif $sender.type == "Bot" then skip("bot")
+            elif is_review_agent($sender.login) then skip("review-agent")
+            else gate($sender.login; $fire)
+            end;
+
         if .event_name == "pull_request" and (.event.action | IN("opened", "reopened", "ready_for_review"))
         then ready
+        elif .event_name == "pull_request" and .event.action == "review_requested"
+        then requested_reviewer
         elif .event_name == "issue_comment"
         then comment_command
         else skip("not-a-review-request")
