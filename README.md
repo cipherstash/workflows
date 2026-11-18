@@ -63,8 +63,8 @@ Only one `fire` runs per pull request at a time: a second waits rather than canc
 The request decision is the part that reads a GitHub event and decides whether it is a review request to send on.
 It is one `jq` program, in `request-decision/decision.jq`.
 
-A reusable workflow runs in the calling repository, so the `decide` job's first step checks out this repository to get the program.
-It checks out only that file, at the commit the caller pinned (`job.workflow_sha`), into `.cipherstash-workflows` in the job's workspace, and keeps no credentials.
+A reusable workflow runs in the calling repository, so the `decide` job's first step checks out this repository to get the program and the Python step files.
+It checks out only that file and the `steps/` directory, at the commit the caller pinned (`job.workflow_sha`), into `.cipherstash-workflows` in the job's workspace, and keeps no credentials.
 If the checkout fails, the decision is a skip with the reason `decision-failed`, and the run shows an error.
 
 `request-decision/test` runs the same file against the saved cases, so the tests run exactly what ships.
@@ -107,11 +107,25 @@ An event that has no pull request author, such as a payload whose `user` is `nul
 
 Some steps, such as the membership lookup and the request to the routine trigger, are written in Python.
 They use only Python's standard library and keep to Python 3.10, so nothing is installed when they run.
-Each one is kept inline in the reusable workflow for now, with `shell: python3 {0}` and an `id`.
-Issues #23 to #25 move them into files in this repository.
+They read their inputs only from environment variables that the workflow sets.
 
-The workflows repository must stay public. A caller's built-in token reads the request decision from it, so if it became private, every run would end as decision-failed with an error.
-The unit tests in `tests/` read each step's script out of the workflow, so they test exactly what ships.
+The code for these steps is in the `steps/` directory:
+
+| File | What it is |
+| --- | --- |
+| `steps/lookup.py` | The membership lookup, in the `decide` job. |
+| `steps/report.py` | The last step of the `decide` job. It passes on the decision, or the `decision-failed` skip, and writes the summary line. |
+| `steps/helpers.py` | Code every step shares: the time limits, the redirect blocker, annotations, step outputs and hiding a token. |
+
+The `decide` job checks out `steps/` with the request decision, as described above.
+Each step names its file in its `env` as `STEP_FILE`, and runs it with the runner's `python3`.
+If the report's file was not checked out, the step still writes the `decision-failed` skip, an error and the summary line by itself.
+
+The request to the routine trigger is still written inline in the reusable workflow, with `shell: python3 {0}` and an `id`.
+Issues #24 and #25 move the inline steps into files.
+
+The workflows repository must stay public. A caller's built-in token reads the request decision and the step files from it, so if it became private, every run would end as decision-failed with an error.
+The unit tests in `tests/` run the same step files, and read each inline step's script out of the workflow, so they test exactly what ships.
 
 ## Checks
 
@@ -148,12 +162,16 @@ python3 -m unittest discover --start-directory tests
 
 `tests/harness.py` runs one step of the reusable workflow on its own:
 
-- `run_step(job, step_id, env, api_url=...)` reads the step's script out of the workflow with `yq`, runs it with the step's shell, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`) and its `::error::` annotations (`.errors()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`.
+- `run_step(job, step_id, env, api_url=...)` runs the step's file from `steps/` (or, for an inline step, reads its script out of the workflow with `yq`) with `python3`, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`) and its `::error::` annotations (`.errors()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`.
 - `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body (and, optionally, headers to add, such as a redirect's `Location`), to `StubServer.HANG` for an answer that never comes, to `StubServer.DROP` for a connection closed without one, or to `StubServer.drip(status)` for an answer whose body never ends, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
-- `substitutions` replaces text in the script before it runs, such as a timeout constant lowered so a test does not wait, or the routine API's fixed address swapped for the stand-in server's. Each piece of text must appear exactly once in the script.
+- `substitutions` replaces text in the step's code before it runs, such as a timeout constant lowered so a test does not wait, or the routine API's fixed address swapped for the stand-in server's. For a step file, the code includes `steps/helpers.py`. Each piece of text must appear exactly once in all of it. The files in `steps/` are not changed: the harness runs a changed copy.
+- `run_step_as_written(job, step_id, env)` runs a step's `run` script exactly as the workflow writes it, with `bash`. It checks what a step does around its file, such as when the file was not checked out.
 
 1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
 2. Run the unit tests and check the new test passes.
 
-The Python steps are inline scripts for now, and inline scripts cannot share a module, so each step that makes a request keeps its own copy of the shared scaffolding: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener`, `escaped` and `output`.
-`tests/test_python_steps.py` checks that every copy is identical, so a change to one copy must be made to all of them.
+An inline step cannot import `steps/helpers.py`, so it keeps its own copy of the shared code: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener`, `escaped`, `error` and `output`.
+`tests/test_python_steps.py` checks that every copy is identical to `steps/helpers.py`, so a change to the module must be made to every copy too.
+The check goes when the last inline step moves into a file.
+
+`tests/test_decision_file.py` checks that each file the workflow runs from its checkout exists in this repository and is included in the checkout, so a renamed file fails the tests rather than every run.

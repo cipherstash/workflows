@@ -2,9 +2,10 @@
 # member and, if it is, fires the Claude code-review routine trigger for that pull request.
 #
 # Called from a short caller workflow in each repository (see examples/claude-review.yml). A reusable workflow runs in
-# the calling repository, so the decide job checks out the request decision, request-decision/decision.jq, from this
-# repository at the commit the caller pinned, and request-decision/test runs that same file against saved cases. The
-# Python steps' scripts are inline, and the unit tests in tests/ read them out of this file and run them.
+# the calling repository, so the decide job checks out the request decision, request-decision/decision.jq, and the
+# Python step files in steps/ from this repository at the commit the caller pinned. request-decision/test runs that same
+# jq file against saved cases, and the unit tests in tests/ run the same step files. The fire job's Python step is still
+# inline, and the unit tests read it out of this file and run it.
 #
 # Kinds of review request handled so far: Ready (a non-draft pull request opened or reopened, or a draft marked ready
 # for review). Drafts, bots' pull requests, forks and deleted forks are skipped, and so is a pull request whose author
@@ -49,17 +50,19 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     outputs:
-      decision: ${{ steps.final.outputs.decision }}
+      # The report step always writes a decision. The fallback is the decision-failed skip, in case it could not.
+      decision: ${{ steps.final.outputs.decision || '{"decision":"skip","reason":"decision-failed"}' }}
     env:
       # The request decision's jq program, from this repository's checkout (the checkout step below).
       REQUEST_DECISION_FILE: ${{ github.workspace }}/.cipherstash-workflows/request-decision/decision.jq
     steps:
-      # A reusable workflow runs in the calling repository, so the request decision is checked out from this repository
-      # at the commit the caller pinned: job.workflow_repository and job.workflow_sha name the reusable workflow, not
-      # the caller. Only the decision's file is checked out. This job checks out no caller files, so its workspace is
-      # empty and the directory name is only a label. No credentials are kept. The step is skipped if either value is empty, so it never falls back to the caller's repository and
-      # the pull request's own code.
-      - name: Check out the request decision
+      # A reusable workflow runs in the calling repository, so the request decision and the Python step files are
+      # checked out from this repository at the commit the caller pinned: job.workflow_repository and job.workflow_sha
+      # name the reusable workflow, not the caller. Only the decision's file and the steps/ directory are checked out.
+      # This job checks out no caller files, so its workspace is empty and the directory name is only a label. No
+      # credentials are kept. The step is skipped if either value is empty, so it never falls back to the caller's
+      # repository and the pull request's own code.
+      - name: Check out the request decision and the step files
         id: checkout
         if: job.workflow_repository != '' && job.workflow_sha != ''
         continue-on-error: true
@@ -68,7 +71,9 @@ jobs:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: .cipherstash-workflows
-          sparse-checkout: /request-decision/decision.jq
+          sparse-checkout: |
+            /request-decision/decision.jq
+            /steps/
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -131,169 +136,12 @@ jobs:
           ORG: ${{ github.repository_owner }}
           TEAM: ${{ inputs.team }}
           REQUESTER: ${{ steps.first.outputs.requester }}
-        # Python's standard library only (3.10 features), so nothing is installed; tests/test_lookup.py runs this script.
-        shell: python3 {0}
-        run: |
-          # Membership is never assumed: anything but a clear answer from GitHub is "lookup-failed", which skips.
-          import contextlib
-          import http.client
-          import json
-          import os
-          import re
-          import signal
-          import urllib.error
-          import urllib.request
-          import uuid
-
-          # Seconds to wait to connect, and then for each read of the answer.
-          TIMEOUT_SECONDS = 10
-          # Seconds one request may take in all, however slowly the answer arrives.
-          TOTAL_SECONDS = 30
-          # The most of an answer's body that is read. A membership is far smaller; a larger answer is not one.
-          MAX_BODY_BYTES = 64 * 1024
-
-          # Names go into the URL, so each must start with a letter, digit or (for a team) underscore, which keeps "."
-          # and ".." out. A login is letters and digits joined by single hyphens (or underscores, for managed users).
-          ORG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
-          TEAM_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
-          LOGIN = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*")
-
-
-          class LookupFailed(Exception):
-              """Membership could not be checked; the message says why."""
-
-
-          class TotalTimeout(Exception):
-              """One request took longer than TOTAL_SECONDS."""
-
-
-          def escaped(message):
-              """message escaped as GitHub's workflow commands require, so no value can end an annotation or start another."""
-              return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-
-
-          def error(message):
-              print(f"::error::{escaped(message)}", flush=True)
-
-
-          def output(name, value):
-              # A random delimiter makes any value safe, even one with a newline in it.
-              delimiter = f"ghadelim_{uuid.uuid4()}"
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as file:
-                  file.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
-
-
-          class NoRedirects(urllib.request.HTTPRedirectHandler):
-              # A redirect is an answer to report, not to follow: following it could send the token somewhere else.
-              def redirect_request(self, *args, **kwargs):
-                  return None
-
-
-          # urllib.request reads the proxy settings of the environment (http_proxy, https_proxy and no_proxy, in either
-          # case) by default, but not ALL_PROXY.
-          opener = urllib.request.build_opener(NoRedirects)
-
-
-          def on_total_timeout(signum, frame):
-              raise TotalTimeout()
-
-
-          @contextlib.contextmanager
-          def total_time_limit():
-              """Raises TotalTimeout inside the block once TOTAL_SECONDS have passed. The block can end the limit early with
-              signal.setitimer(signal.ITIMER_REAL, 0). Leaving the block ends the limit and puts the previous SIGALRM handler
-              back, even if the alarm comes while that happens."""
-              previous = signal.signal(signal.SIGALRM, on_total_timeout)
-              signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
-              try:
-                  yield
-              finally:
-                  try:
-                      signal.setitimer(signal.ITIMER_REAL, 0)
-                  finally:
-                      signal.signal(signal.SIGALRM, previous)
-
-
-          def api(path, token):
-              """GETs path from the GitHub API and returns (status, body), reading at most MAX_BODY_BYTES + 1 bytes of an
-              answer. The token is only ever a request header."""
-              request = urllib.request.Request(
-                  f"{os.environ['GITHUB_API_URL']}/{path}",
-                  headers={
-                      "Authorization": f"Bearer {token}",
-                      "Accept": "application/vnd.github+json",
-                      "X-GitHub-Api-Version": "2022-11-28",
-                  },
-              )
-              result = None
-              try:
-                  with total_time_limit():
-                      try:
-                          with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-                              # Read with the time limit running: a 200's body is the membership, so one cut off is a
-                              # lookup-failed.
-                              result = (response.status, response.read(MAX_BODY_BYTES + 1))
-                      except urllib.error.HTTPError as answer:
-                          # The body of a status other than 200 is never used.
-                          answer.close()
-                          result = (answer.code, b"")
-              except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
-                  if result is not None:  # The alarm came after the answer was complete.
-                      return result
-                  # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
-                  # reported.
-                  reason = getattr(failure, "reason", failure)
-                  raise LookupFailed(f"Could not reach GitHub to look up team membership ({type(reason).__name__})")
-              return result
-
-
-          def look_up(token, org, team, requester):
-              if os.environ.get("TOKEN_OUTCOME") != "success" or not token:
-                  raise LookupFailed(
-                      "Could not create the membership App's token: check the CLAUDE_REVIEW_APP_ID and "
-                      f"CLAUDE_REVIEW_APP_PRIVATE_KEY secrets, and that the App is installed on {org} with Members: read"
-                  )
-              if not (ORG_NAME.fullmatch(org) and TEAM_NAME.fullmatch(team) and LOGIN.fullmatch(requester)):
-                  raise LookupFailed(
-                      "Cannot look up team membership: the organisation, team or requester is not a valid GitHub name"
-                  )
-              status, body = api(f"orgs/{org}/teams/{team}/memberships/{requester}", token)
-              if status == 200:
-                  try:
-                      membership = json.loads(body) if len(body) <= MAX_BODY_BYTES else None
-                  except ValueError:
-                      membership = None
-                  if not isinstance(membership, dict):
-                      raise LookupFailed(
-                          f"Cannot look up team membership in {org}/{team}: GitHub's answer was not a membership"
-                      )
-                  # A pending invitation is not membership.
-                  return "member" if membership.get("state") == "active" else "not-member"
-              if status == 404:
-                  # GitHub also answers 404 for a team that does not exist, which would otherwise skip everyone quietly.
-                  team_status, _ = api(f"orgs/{org}/teams/{team}", token)
-                  if team_status == 200:
-                      return "not-member"
-                  raise LookupFailed(
-                      f"Cannot look up team membership: team {org}/{team} was not found (HTTP {team_status}); "
-                      "check the team input and the App's installation"
-                  )
-              raise LookupFailed(f"Cannot look up team membership in {org}/{team}: GitHub answered HTTP {status}")
-
-
-          membership = "lookup-failed"
-          try:
-              membership = look_up(
-                  os.environ.get("APP_TOKEN", ""),
-                  os.environ.get("ORG", ""),
-                  os.environ.get("TEAM", ""),
-                  os.environ.get("REQUESTER", ""),
-              )
-          except LookupFailed as failure:
-              error(str(failure))
-          except Exception as failure:  # Anything unexpected still ends as a reported lookup-failed, never a member.
-              error(f"Cannot look up team membership: the lookup broke ({type(failure).__name__})")
-          output("membership", membership)
+          # The lookup's file, from this repository's checkout. Python's standard library only (3.10 features), so
+          # nothing is installed; tests/test_lookup.py runs this file.
+          STEP_FILE: ${{ github.workspace }}/.cipherstash-workflows/steps/lookup.py
+        # Membership is never assumed: anything but a clear answer from GitHub is "lookup-failed", which skips. If the
+        # file cannot be run, the membership output is missing, and the next step treats that as "lookup-failed".
+        run: python3 "$STEP_FILE"
 
       - name: Decide (with the membership lookup's result)
         id: second
@@ -321,70 +169,19 @@ jobs:
         env:
           FIRST: ${{ steps.first.outputs.decision }}
           SECOND: ${{ steps.second.outputs.decision }}
-        # Python's standard library only (3.10 features), so nothing is installed; tests/test_report.py runs this script.
-        shell: python3 {0}
+          # The report's file, from this repository's checkout. Python's standard library only (3.10 features), so
+          # nothing is installed; tests/test_report.py runs this file.
+          STEP_FILE: ${{ github.workspace }}/.cipherstash-workflows/steps/report.py
+        # Without the checked-out file (the checkout failed), this step does by itself what the file does when no
+        # decision finished: it writes the decision-failed skip, an error and the summary line.
         run: |
-          import json
-          import os
-          import uuid
-
-          FAILED = '{"decision":"skip","reason":"decision-failed"}'
-
-
-          def output(name, value):
-              # A random delimiter makes any value safe, even one with a newline in it.
-              delimiter = f"ghadelim_{uuid.uuid4()}"
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as file:
-                  file.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
-
-
-          def finished(value):
-              """The decision value parsed, if it is a finished decision (a skip or a fire), or else None."""
-              try:
-                  decision = json.loads(value)
-              except ValueError:
-                  return None
-              if isinstance(decision, dict) and decision.get("decision") in ("skip", "fire"):
-                  return decision
-              return None
-
-
-          def text(value):
-              # As jq's string interpolation: a string as it is, anything else as JSON.
-              return value if isinstance(value, str) else json.dumps(value)
-
-
-          def summary(decision):
-              if decision.get("decision") == "fire":
-                  pull_request = decision.get("pull_request")
-                  number = pull_request.get("number") if isinstance(pull_request, dict) else None
-                  line = (
-                      f"Claude review: requested ({text(decision.get('kind'))}, by @{text(decision.get('requester'))}, "
-                      f"pull request #{text(number)})"
-                  )
-              else:
-                  line = f"Claude review: skipped ({text(decision.get('reason'))})"
-              # One line, whatever the decision holds, so it cannot start a workflow command.
-              return line.replace("\r", " ").replace("\n", " ")
-
-
-          try:
-              output("decision", FAILED)
-              value = os.environ.get("SECOND") or os.environ.get("FIRST") or ""
-              decision = finished(value)
-              if decision is None:
-                  print("::error::The request decision did not finish; no review was requested", flush=True)
-                  value, decision = FAILED, json.loads(FAILED)
-              if decision.get("reason") == "membership-lookup-failed":
-                  print("::error::Team membership could not be checked, so no review was requested", flush=True)
-              # Passed on as the decision step wrote it.
-              output("decision", value)
-              line = summary(decision)
-              print(line, flush=True)
-              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as file:
-                  file.write(line + "\n")
-          except Exception as failure:  # The decision-failed skip, written first, stands.
-              print(f"::error::Could not report the request decision ({type(failure).__name__})", flush=True)
+          if [[ -f "$STEP_FILE" ]]; then
+            exec python3 "$STEP_FILE"
+          fi
+          echo 'decision={"decision":"skip","reason":"decision-failed"}' >>"$GITHUB_OUTPUT"
+          echo "::error::The request decision did not finish; no review was requested"
+          echo "Claude review: skipped (decision-failed)"
+          echo "Claude review: skipped (decision-failed)" >>"$GITHUB_STEP_SUMMARY"
 
   # Fires the routine trigger. It holds no permissions and sees only the decision, never the event's free text.
   fire:

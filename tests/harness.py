@@ -1,11 +1,11 @@
 """Runs one step of the reusable workflow on its own, with a controlled environment, for the unit tests.
 
-The Python steps' scripts are kept inline in .github/workflows/claude-review.yml for now; issues #23 to #25 move them
-into files in this repository, which the workflow checks out the way it already does for the request decision.
-The harness reads a step's script out of the workflow with yq, so the tests run
-exactly what ships, and runs it the way the runner would: with python3, and with GITHUB_OUTPUT,
-GITHUB_STEP_SUMMARY and RUNNER_TEMP pointing at temporary files. Nothing else is inherited from the environment
-running the tests, so no proxy settings or real tokens leak in.
+Most Python steps run from files in steps/, which the workflow checks out from this repository. Such a step names its
+file in its env, as STEP_FILE, and the harness runs that same file from this repository, beside the shared helper
+module it imports. The steps still inline in .github/workflows/claude-review.yml (issues #24 and #25 move them) are read
+out of the workflow with yq. Either way the tests run exactly what ships, the way the runner would: with python3, and
+with GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and RUNNER_TEMP pointing at temporary files. Nothing else is inherited from the
+environment running the tests, so no proxy settings or real tokens leak in.
 
 Needs python3 (3.10 or later) and yq. Either yq works: mikefarah's (as on GitHub's ubuntu-latest runners) or
 the Python jq wrapper.
@@ -23,7 +23,13 @@ import sys
 import tempfile
 import threading
 
-WORKFLOW = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows" / "claude-review.yml"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+WORKFLOW = ROOT / ".github" / "workflows" / "claude-review.yml"
+# Where the step files live in this repository.
+STEPS_DIR = ROOT / "steps"
+# Where the workflow checks out this repository, in the job's workspace.
+CHECKOUT_PATH = ".cipherstash-workflows"
+WORKSPACE_PREFIX = "${{ github.workspace }}/"
 
 # The shell a Python step names, so the runner runs its script with python3.
 PYTHON_SHELL = "python3 {0}"
@@ -104,13 +110,38 @@ def python_steps():
     return steps
 
 
+@functools.lru_cache(maxsize=None)
+def file_steps():
+    """(job, step id) for every step of the workflow that runs a step file, named by its env's STEP_FILE."""
+    steps = []
+    for job in _yq(".jobs | keys | .[]").split():
+        for step_id in _yq(f'.jobs.{job}.steps[] | select(.env.STEP_FILE != null) | .id').split("\n"):
+            if step_id:
+                steps.append((job, step_id))
+    return tuple(steps)
+
+
 def python_steps_without_id():
-    """The names of the python3 steps that have no id, which python_steps cannot list and the tests cannot find."""
+    """The names of the Python steps that have no id, which python_steps and file_steps cannot list and the tests
+    cannot find."""
     names = []
     for job in _yq(".jobs | keys | .[]").split():
-        query = f'.jobs.{job}.steps[] | select(.shell == "{PYTHON_SHELL}" and .id == null) | (.name // "(unnamed)")'
+        query = (
+            f'.jobs.{job}.steps[] | select((.shell == "{PYTHON_SHELL}" or .env.STEP_FILE != null) and .id == null)'
+            ' | (.name // "(unnamed)")'
+        )
         names.extend(line for line in _yq(query).split("\n") if line)
     return names
+
+
+@functools.lru_cache(maxsize=None)
+def step_file_path(job, step_id):
+    """The step file, in this repository, that the step's STEP_FILE names in the workflow's checkout."""
+    value = _yq(_step_query(job, step_id) + ' | .env.STEP_FILE // ""').strip()
+    prefix = f"{WORKSPACE_PREFIX}{CHECKOUT_PATH}/"
+    if not value.startswith(prefix):
+        raise LookupError(f"step {step_id!r} in job {job!r} has no STEP_FILE in {CHECKOUT_PATH}: {value!r}")
+    return ROOT / value[len(prefix):]
 
 
 @functools.lru_cache(maxsize=None)
@@ -122,33 +153,80 @@ def step_env_names(job, step_id):
 def run_step(job, step_id, env, api_url="http://127.0.0.1:9", substitutions=None, timeout=20):
     """Runs the step with only the given env (plus the runner's own variables) and returns a StepResult.
 
-    substitutions maps text in the script to its replacement, such as a timeout constant lowered for a test. Each
-    piece of text must appear exactly once, so a test fails loudly if the script changes under it.
+    A step that names a step file runs that file, from a copy of steps/ so that the shared helper module is beside it.
+    Any other step runs its inline script, read out of the workflow.
+
+    substitutions maps text in the step's code to its replacement, such as a timeout constant lowered for a test. For
+    a step file, the code is the file and the modules beside it, such as the shared helper module. Each piece of text
+    must appear exactly once in all of that code, so a test fails loudly if the code changes under it.
     """
-    script, shell = step_script(job, step_id)
-    # Untrusted text must reach a script through env, never through an expression placed in the script.
-    if "${{" in script:
-        raise AssertionError(f"step {step_id!r} has a workflow expression inside its script")
     undeclared = set(env) - step_env_names(job, step_id)
     if undeclared:
         raise AssertionError(f"step {step_id!r} does not declare env {sorted(undeclared)}")
+    if (job, step_id) in file_steps():
+        # The step file and every module beside it, which the step may import.
+        step_file = step_file_path(job, step_id)
+        sources = {path.name: path.read_text(encoding="utf-8") for path in step_file.parent.glob("*.py")}
+        main = step_file.name
+    else:
+        script, shell = step_script(job, step_id)
+        if shell != PYTHON_SHELL:
+            raise AssertionError(f"step {step_id!r} uses shell {shell!r}, which the harness cannot run")
+        sources = {"step": script}
+        main = "step"
+    for name, source in sources.items():
+        # Untrusted text must reach a script through env, never through an expression placed in the script.
+        if "${{" in source:
+            raise AssertionError(f"step {step_id!r} has a workflow expression inside {name}")
     for old, new in (substitutions or {}).items():
-        count = script.count(old)
+        count = sum(source.count(old) for source in sources.values())
         if count != 1:
             raise AssertionError(f"expected {old!r} once in step {step_id!r}, found it {count} times")
-        script = script.replace(old, new)
+        sources = {name: source.replace(old, new) for name, source in sources.items()}
 
+    def command(temp):
+        # A directory of its own, so python3 finds the step's modules beside it and nothing else.
+        code = temp / "code"
+        code.mkdir()
+        for name, source in sources.items():
+            (code / name).write_text(source, encoding="utf-8")
+        return [sys.executable, str(code / main)]
+
+    return _run(command, env, api_url, timeout)
+
+
+def run_step_as_written(job, step_id, env, api_url="http://127.0.0.1:9", timeout=20):
+    """Runs the step's run script exactly as the workflow writes it, with bash, and returns a StepResult.
+
+    For a step whose script only starts its step file, this checks what the script does around the file, such as when
+    the file was not checked out; the env gives the file's path as STEP_FILE. The file itself is tested with run_step.
+    """
+    undeclared = set(env) - step_env_names(job, step_id)
+    if undeclared:
+        raise AssertionError(f"step {step_id!r} does not declare env {sorted(undeclared)}")
+    script, shell = step_script(job, step_id)
+    if shell not in ("", "bash"):
+        raise AssertionError(f"step {step_id!r} uses shell {shell!r}, not bash")
+    if "${{" in script:
+        raise AssertionError(f"step {step_id!r} has a workflow expression inside its script")
+
+    def command(temp):
+        path = temp / "step.sh"
+        path.write_text(script, encoding="utf-8")
+        # The runner's default shell for a run script.
+        return ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(path)]
+
+    return _run(command, env, api_url, timeout)
+
+
+def _run(command, env, api_url, timeout):
+    """Runs command(temp directory) with only env plus the runner's own variables, and returns a StepResult."""
     with tempfile.TemporaryDirectory() as temp:
         temp = pathlib.Path(temp)
         output_path = temp / "output"
         summary_path = temp / "summary"
         output_path.touch()
         summary_path.touch()
-        script_path = temp / "step"
-        script_path.write_text(script, encoding="utf-8")
-        if shell != PYTHON_SHELL:
-            raise AssertionError(f"step {step_id!r} uses shell {shell!r}, which the harness cannot run")
-        command = [sys.executable, str(script_path)]
         runner_temp = temp / "runner"
         runner_temp.mkdir()
         full_env = {
@@ -160,7 +238,7 @@ def run_step(job, step_id, env, api_url="http://127.0.0.1:9", substitutions=None
             "RUNNER_TEMP": str(runner_temp),
             **env,
         }
-        completed = subprocess.run(command, env=full_env, capture_output=True, text=True, timeout=timeout)
+        completed = subprocess.run(command(temp), env=full_env, capture_output=True, text=True, timeout=timeout)
         return StepResult(
             completed.returncode,
             completed.stdout,

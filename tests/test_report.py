@@ -3,7 +3,7 @@
 import json
 import unittest
 
-from harness import run_step
+from harness import ROOT, run_step, run_step_as_written
 
 FIRE = {
     "decision": "fire",
@@ -94,6 +94,29 @@ class GivenNoFinishedDecision(ReportTest):
     def test_a_value_with_newlines_cannot_write_a_second_output(self):
         value = 'not json\ndecision={"decision":"fire"}\nghadelim_x'
         self.assert_decision_failed(self.report(first=value))
+
+
+class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
+    """The step as the workflow writes it, run by bash: it runs the checked-out file, or, without it, still leaves the
+    decision-failed skip, as the file would when no decision finished."""
+
+    def test_without_the_file_the_step_writes_the_decision_failed_skip(self):
+        result = run_step_as_written(
+            "decide", "final", {"STEP_FILE": "/nonexistent/steps/report.py", "FIRST": compact(FIRE), "SECOND": ""}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.outputs["decision"]), DECISION_FAILED)
+        self.assertEqual(result.errors(), [NOT_FINISHED])
+        self.assertEqual(result.summary, "Claude review: skipped (decision-failed)\n")
+
+    def test_with_the_file_the_step_runs_it(self):
+        result = run_step_as_written(
+            "decide", "final", {"STEP_FILE": str(ROOT / "steps" / "report.py"), "FIRST": compact(FIRE), "SECOND": ""}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.outputs["decision"]), FIRE)
+        self.assertEqual(result.errors(), [])
+        self.assertEqual(result.summary, "Claude review: requested (ready, by @alice, pull request #7)\n")
 
 
 if __name__ == "__main__":
