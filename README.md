@@ -117,7 +117,7 @@ The code for these steps is in the `steps/` directory:
 | `steps/lookup.py` | The membership lookup, in the `decide` job. |
 | `steps/report.py` | The last step of the `decide` job. It passes on the decision, or the `decision-failed` skip, and writes the summary line. |
 | `steps/fire.py` | The request to the routine trigger, in the `fire` job. |
-| `steps/helpers.py` | Code every step shares: the time limits, the redirect blocker, annotations, step outputs and hiding a token. |
+| `steps/helpers.py` | Code every step shares: sending one request within the time limits without following a redirect, GitHub API headers, annotations, step outputs and hiding a token. |
 
 The `decide` job checks out `steps/` with the request decision, as described above.
 The `fire` job checks out `steps/` in the same way, because a job cannot see another job's files.

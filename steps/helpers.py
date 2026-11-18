@@ -8,8 +8,10 @@ in the code.
 """
 
 import contextlib
+import http.client
 import os
 import signal
+import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Iterator
@@ -24,6 +26,14 @@ TOTAL_SECONDS = 30
 
 class TotalTimeout(Exception):
     """One request took longer than TOTAL_SECONDS."""
+
+
+class Unreachable(Exception):
+    """A request got no status: kind names the failure's type, which is all a step reports of it."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
 
 
 def escaped(message: str) -> str:
@@ -80,3 +90,59 @@ def total_time_limit() -> Iterator[None]:
             signal.setitimer(signal.ITIMER_REAL, 0)
         finally:
             signal.signal(signal.SIGALRM, previous)
+
+
+def github_headers(token: str) -> dict[str, str]:
+    """The headers of a GitHub API request: the token, only ever as a request header, and the API version."""
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def send(
+    request: urllib.request.Request, read_ok_bytes: int | None = None, read_error_bytes: int = 0
+) -> tuple[int, bytes]:
+    """Sends request once, with no retry and no redirect followed, and returns (status, body) within TOTAL_SECONDS.
+
+    With read_ok_bytes, the body of a 2xx answer is the answer: at most that many bytes of it are read with the time
+    limit running, and the answer counts only once it is read, or, for an error answer (whose body is never read),
+    once it is closed. Without it, the status is the answer: it counts as soon as it arrives and the body is b"".
+    The time limit then ends, unless read_error_bytes asks for the start of an error answer's body, which is read with
+    the time limit running; if that read fails, the status stands with an empty body.
+
+    Raises Unreachable if no answer counted: URLError, timeouts, refused or dropped connections, an answer cut off
+    before it counted.
+    """
+    result = None
+    try:
+        with total_time_limit():
+            try:
+                with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                    if read_ok_bytes is None:
+                        # Nothing after this can make an answer that arrived look like a failure.
+                        result = (response.status, b"")
+                        signal.setitimer(signal.ITIMER_REAL, 0)
+                    else:
+                        result = (response.status, response.read(read_ok_bytes))
+            except urllib.error.HTTPError as answer:
+                if read_ok_bytes is not None:
+                    answer.close()
+                    result = (answer.code, b"")
+                else:
+                    result = (answer.code, b"")
+                    try:
+                        if read_error_bytes:
+                            result = (answer.code, answer.read(read_error_bytes))
+                        else:
+                            signal.setitimer(signal.ITIMER_REAL, 0)
+                    finally:
+                        answer.close()
+    except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
+        if result is None:
+            # Only the failure's kind is reported.
+            reason = getattr(failure, "reason", failure)
+            raise Unreachable(type(reason).__name__) from None
+        # The answer counted; only what came after it failed or ran out of time, so it stands.
+    return result
