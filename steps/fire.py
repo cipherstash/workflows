@@ -1,0 +1,126 @@
+"""The fire job's step: fires the Claude code-review routine trigger with the request decision's text.
+
+Only a 2xx answer counts as sent, and writes the step output sent=true. Anything else is an error annotation and a failed
+step, which the step's continue-on-error keeps from turning the check red.
+
+Inputs, all environment variables: CLAUDE_ROUTINE_TOKEN (the routine's bearer token), TRIGGER_ID (the routine's trigger
+id), DECISION (the request decision) and the runner's GITHUB_OUTPUT.
+Python's standard library only (3.10 features); tests/test_fire.py runs this file.
+"""
+
+import http.client
+import json
+import os
+import re
+import signal
+import sys
+import urllib.error
+import urllib.request
+
+from helpers import TIMEOUT_SECONDS, TotalTimeout, error, opener, output, redacted, total_time_limit
+
+# The routine API's address. It is fixed here: no input or event field can change where the token goes. Only the tests
+# replace it, with a stand-in server's.
+API_BASE_URL = "https://api.anthropic.com"
+# The most of an error answer's body shown in the annotation.
+EXCERPT_CHARACTERS = 200
+
+# The id goes into the URL, so anything but a trigger id is refused.
+TRIGGER_ID = re.compile(r"trig_[A-Za-z0-9]+")
+
+
+class NotSent(Exception):
+    """The request was not sent, or the routine trigger did not accept it; the message says why."""
+
+
+def excerpt(body, token):
+    """The start of an answer's body, on one line, with the token taken out in case the answer repeats it."""
+    text = redacted(body.decode("utf-8", errors="replace"), token)
+    text = " ".join("".join(c if c.isprintable() else " " for c in text).split())
+    if len(text) > EXCERPT_CHARACTERS:
+        text = text[:EXCERPT_CHARACTERS] + "…"
+    return text
+
+
+def post(url, token, body):
+    """POSTs body to url once and returns (status, the start of an error answer's body, or b"" for a 2xx answer).
+    There is no retry: a request that timed out may still have started a session, and a second would review twice.
+    A failed request is re-run by hand. The token is only ever a request header."""
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "experimental-cc-routine-2026-04-01",
+            "Content-Type": "application/json",
+        },
+    )
+    status = None
+    answer_body = b""
+    try:
+        with total_time_limit():
+            try:
+                with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                    # opener.open returns only a 2xx answer, so the routine trigger has accepted the request and a
+                    # session may have started. The time limit ends as soon as the status is known, and the body is
+                    # not read, so nothing after this can make an accepted request look not sent.
+                    status = response.status
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+            except urllib.error.HTTPError as answer:
+                status = answer.code
+                try:
+                    # Read with the time limit running, for the excerpt in the error annotation.
+                    answer_body = answer.read(4096)
+                finally:
+                    answer.close()
+    except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
+        if status is None:
+            # URLError, timeouts, refused or dropped connections, an answer cut off before its status. Only the
+            # failure's kind is reported.
+            reason = getattr(failure, "reason", failure)
+            raise NotSent(f"Could not reach the routine trigger ({type(reason).__name__}); no review was requested")
+        # The status arrived; only the rest of the answer failed or ran out of time, so the status stands.
+    return status, answer_body
+
+
+def fire(token, trigger_id, decision):
+    # An empty token stops here, so it never reaches a request or the excerpt.
+    if not token:
+        raise NotSent("CLAUDE_ROUTINE_TOKEN is empty: pass it to the reusable workflow as a secret")
+    if not TRIGGER_ID.fullmatch(trigger_id):
+        raise NotSent(
+            "routine-trigger-id is not a trigger id (trig_…): pass vars.CLAUDE_ROUTINE_TRIGGER_ID, set under "
+            "Settings > Secrets and variables > Actions > Variables"
+        )
+    try:
+        text = json.loads(decision).get("text")
+    except (ValueError, AttributeError):
+        text = None
+    if not isinstance(text, str):
+        raise NotSent("The request decision has no request text; no review was requested")
+    # json writes the body, so nothing in the pull request's fields can break it.
+    body = json.dumps({"text": text}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    status, answer = post(f"{API_BASE_URL}/v1/claude_code/routines/{trigger_id}/fire", token, body)
+    if not 200 <= status < 300:
+        message = f"The routine trigger answered HTTP {status}; no review was requested"
+        shown = excerpt(answer, token)
+        raise NotSent(f"{message}: {shown}" if shown else message)
+    print(f"Sent the review request to the routine trigger (HTTP {status})", flush=True)
+
+
+try:
+    fire(
+        os.environ.get("CLAUDE_ROUTINE_TOKEN", ""),
+        os.environ.get("TRIGGER_ID", ""),
+        os.environ.get("DECISION", ""),
+    )
+    # Only a request the routine trigger accepted counts as sent.
+    output("sent", "true")
+except NotSent as failure:
+    error(str(failure))
+    sys.exit(1)
+except Exception as failure:  # Anything unexpected is reported by its kind only, and is not sent.
+    error(f"Could not send the review request: the step broke ({type(failure).__name__})")
+    sys.exit(1)

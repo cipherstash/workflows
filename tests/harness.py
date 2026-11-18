@@ -1,9 +1,9 @@
 """Runs one step of the reusable workflow on its own, with a controlled environment, for the unit tests.
 
-Most Python steps run from files in steps/, which the workflow checks out from this repository. Such a step names its
-file in its env, as STEP_FILE, and the harness runs that same file from this repository, beside the shared helper
-module it imports. The steps still inline in .github/workflows/claude-review.yml (issues #24 and #25 move them) are read
-out of the workflow with yq. Either way the tests run exactly what ships, the way the runner would: with python3, and
+Python steps run from files in steps/, which the workflow checks out from this repository. Such a step names its file
+in its env, as STEP_FILE, and the harness runs that same file from this repository, beside the shared helper module it
+imports. A step written inline in .github/workflows/claude-review.yml, with shell: python3 {0}, is read out of the
+workflow with yq. Either way the tests run exactly what ships, the way the runner would: with python3, and
 with GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and RUNNER_TEMP pointing at temporary files. Nothing else is inherited from the
 environment running the tests, so no proxy settings or real tokens leak in.
 
