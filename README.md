@@ -51,10 +51,16 @@ No reaction means no request was sent: the comment was not a command, its author
 - It does nothing on a closed or merged pull request.
 - It does nothing on a pull request from a fork, including a deleted fork. GitHub does not give a fork's `pull_request` events the repository's secrets, so the membership check could never succeed. On a fork, use the comment command instead.
 - Every request fires. To ask again, remove `cipherstash-agent` from the reviewers and request it again, or use the comment command.
+- Once the review agent has posted a review, the re-request button in the Reviewers box should also send a new request. This is expected, but it has not been tried yet.
 - There is no reaction and no instructions. To add instructions, use the comment command.
 
 GitHub does not let you request a pull request's author as its reviewer.
 So on pull requests that `cipherstash-agent` opened, only Ready and the comment command can request a review.
+
+If a pull request is opened with `cipherstash-agent` already requested as a reviewer, GitHub may send both the `opened` event and the review request.
+So the pull request can get two reviews.
+To get one review, open the pull request without requesting the agent, or request it later.
+This is possible, not confirmed.
 
 A failed request never turns a pull request's checks red.
 It shows as an error in the workflow run instead.
