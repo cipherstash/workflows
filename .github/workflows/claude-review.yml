@@ -180,8 +180,10 @@ jobs:
         # Without the checked-out file (the checkout failed), this step does by itself what the file does when no
         # decision finished: it writes the decision-failed skip, an error and the summary line.
         run: |
-          if [[ -f "$STEP_FILE" ]]; then
-            exec python3 "$STEP_FILE"
+          # If the file cannot run (for example its helper module is missing), the lines below run too; a later write of
+          # the same output name wins, so the decision-failed skip stands.
+          if [[ -f "$STEP_FILE" ]] && python3 "$STEP_FILE"; then
+            exit 0
           fi
           echo 'decision={"decision":"skip","reason":"decision-failed"}' >>"$GITHUB_OUTPUT"
           echo "::error::The request decision did not finish; no review was requested"
