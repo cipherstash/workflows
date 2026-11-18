@@ -136,10 +136,12 @@ The unit tests in `tests/` run the same step files, so they test exactly what sh
 Every pull request, and every push to `main`, runs these checks:
 
 - `actionlint` over the workflows in this repository and the example callers in `examples/`.
-- The request decision's saved cases, run by `request-decision/test`.
-  It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
-- A check of `request-decision/test` itself, run by `request-decision/test-runner`.
-- The unit tests of the Python steps, in `tests/`.
+- `python-checks`, which runs Ruff and mypy over every Python file in this repository. See [Linting and type checking](#linting-and-type-checking).
+- `tests`, once for each of Python 3.10, 3.12 and 3.14, which runs:
+  - the request decision's saved cases, run by `request-decision/test`.
+    It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
+  - a check of `request-decision/test` itself, run by `request-decision/test-runner`.
+  - the unit tests of the Python steps, in `tests/`.
 - `zizmor`, a security linter for GitHub Actions, over the workflows, the example callers in `examples/`, and `.github/dependabot.yml`.
 - `actions-lock`, which checks the workflow lockfile.
 
@@ -164,6 +166,10 @@ The unit tests need `python3` (3.10 or later), `bash` and `yq`, and no network: 
 python3 -m unittest discover --start-directory tests
 ```
 
+The `tests` check runs them on Python 3.10, 3.12 and 3.14.
+3.10 is the oldest Python the steps support.
+3.14 is the Python on GitHub's `ubuntu-latest` runners now, which the reusable workflow uses.
+
 ### Adding a unit test
 
 `tests/harness.py` runs one step of the reusable workflow on its own:
@@ -182,6 +188,43 @@ A step written inline in the workflow, with `shell: python3 {0}`, could not impo
 So a new inline step fails the tests until it is added to that list, and then its copies are checked.
 
 `tests/test_decision_file.py` checks that each file the workflow runs from its checkout exists in this repository and is included in the checkout of its own job, and that the `decide` and `fire` jobs check out this repository in the same way. So a renamed file fails the tests rather than every run.
+
+### Linting and type checking
+
+[Ruff](https://docs.astral.sh/ruff/) finds likely mistakes and unsafe code in the Python files.
+[mypy](https://mypy.readthedocs.io/) checks their types.
+Both check every Python file in this repository, as written for Python 3.10, and the check fails on any finding.
+Their settings are in `pyproject.toml`, which holds nothing else: this repository is not a Python package.
+
+The files in `steps/` must have type hints on every function, so that mypy checks every call between them.
+A new step file must be added to the list of step files in `pyproject.toml`.
+In `tests/`, mypy checks the code inside each function, with or without type hints.
+
+Fix a finding where you can.
+If the code is right as it is, add a comment on the line that names the rule and gives the reason, such as:
+
+```python
+except Exception as failure:  # noqa: BLE001 Anything unexpected still ends as a reported lookup-failed.
+```
+
+To run them yourself, install the pinned versions into a virtual environment, then run them from the repository's root:
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install --require-hashes --requirement .github/python-checks/requirements.txt
+.venv/bin/ruff check .
+.venv/bin/mypy
+```
+
+Ruff and mypy are installed only for this repository's own checks.
+The reusable workflow installs nothing: it runs its steps with the runner's `python3`.
+
+`.github/python-checks/requirements.txt` pins Ruff, mypy and every package mypy needs, each by version and the hash of every file PyPI publishes for it.
+Nothing updates these pins, because Dependabot does not read them, so update them by hand:
+
+1. Pick a release at least 7 days old.
+2. Change its version in the file, and replace its hashes with those listed at `https://pypi.org/pypi/<package>/<version>/json`.
+3. For mypy, check the packages it needs, listed in that file under `requires_dist`, and add or update any that changed in the same way.
 
 ### Security checks
 
