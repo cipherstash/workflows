@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Runs the request decision on the JSON object read from standard input and prints the decision as one JSON object.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec jq --compact-output --from-file "$here/decide.jq"

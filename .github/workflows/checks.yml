@@ -1,0 +1,36 @@
+# Checks every pull request to this repository, and every push to main: lints the workflows, checks the request
+# decision's test script, and runs the request decision's saved cases.
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Go's module proxy and checksum database verify the pinned version. shellcheck, which actionlint uses for
+      # `run:` scripts, is preinstalled on ubuntu-latest.
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+
+  request-decision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the test script
+        run: request-decision/test-runner
+      - name: Run the saved cases
+        run: request-decision/test
