@@ -6,7 +6,7 @@ import unittest
 from harness import STEPS_DIR
 
 sys.path.insert(0, str(STEPS_DIR))
-import helpers  # noqa: E402
+import helpers
 
 
 class RedactedTest(unittest.TestCase):

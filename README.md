@@ -118,6 +118,7 @@ A run has up to three jobs:
 - `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
   If the job could not check out its step file, nothing is sent, and the run shows an error, but the check stays green.
 - `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, never for Ready or a requested reviewer, and only once `fire` has sent the request. It sends the reaction once, with no retry, and does not follow a redirect. HTTP `201` (added) or `200` (already there) counts as reacted. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
+  If the job could not check out its step file, no reaction is added, and the run shows a warning, but the check stays green.
 
 `decide` and `fire` hold no permissions.
 `react` holds only `issues: write`, which GitHub documents as the permission for adding a reaction to an issue or pull request comment.
@@ -196,32 +197,38 @@ The code for these steps is in the `steps/` directory:
 | `steps/lookup.py` | The membership lookup, in the `decide` job. |
 | `steps/report.py` | The last step of the `decide` job. It passes on the decision, or the `decision-failed` skip, and writes the summary line. |
 | `steps/fire.py` | The request to the routine trigger, in the `fire` job. |
+| `steps/react.py` | The 👀 reaction, in the `react` job. |
 | `steps/helpers.py` | Code every step shares: the time limits, the redirect blocker, annotations, step outputs and hiding a token. |
 
 The `decide` job checks out `steps/` with the request decision, as described above.
-The `fire` job checks out `steps/` in the same way, because a job cannot see another job's files.
-Each step names its file in its `env` as `STEP_FILE`, and runs it with the runner's `python3`.
+The `fire` and `react` jobs check out `steps/` in the same way, because a job cannot see another job's files.
+Each of these checkouts is the step that comes first in its job, and a test checks that they all use the same settings.
+Each Python step names its file in its `env` as `STEP_FILE`, and its short `bash` script runs that file with the runner's `python3`.
 If the report's file was not checked out, the step still writes the `decision-failed` skip, an error and the summary line by itself.
 If the routine call's file was not checked out, the step sends nothing and shows an error.
+If the reaction's file or the helper module was not checked out, or the helper module cannot be loaded, the step adds no reaction and shows a warning.
+
+The `react` job holds only `issues: write`, and no `contents` permission, yet its checkout reads this repository with the job's token.
+That works because this repository is public, as it does for the `decide` and `fire` jobs, which hold no permissions at all.
 
 The routine API's address is fixed in `steps/fire.py`, so no input or event can change where the token goes.
 Only the unit tests replace it, with a stand-in server's address.
 
-The 👀 reaction is still written inline in the reusable workflow, with `shell: python3 {0}` and an `id`.
-Issue #25 moves it into a file.
-
 The workflows repository must stay public. A caller's built-in token reads the request decision and the step files from it, so if it became private, every run would end as decision-failed with an error.
-The unit tests in `tests/` run the same step files, and read the reaction's script out of the workflow, so they test exactly what ships.
+The unit tests in `tests/` run the same step files, so they test exactly what ships.
+No Python code is written inline in the workflow, and a test fails if a step with `shell: python3 {0}` is added.
 
 ## Checks
 
 Every pull request, and every push to `main`, runs these checks:
 
 - `actionlint` over the workflows in this repository and the example callers in `examples/`.
-- The request decision's saved cases, run by `request-decision/test`.
-  It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
-- A check of `request-decision/test` itself, run by `request-decision/test-runner`.
-- The unit tests of the Python steps, in `tests/`.
+- `python-checks`, which runs Ruff and mypy over every Python file in this repository. See [Linting and type checking](#linting-and-type-checking).
+- `tests`, once for each of Python 3.10, 3.12 and 3.14, which runs:
+  - the request decision's saved cases, run by `request-decision/test`.
+    It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
+  - a check of `request-decision/test` itself, run by `request-decision/test-runner`.
+  - the unit tests of the Python steps, in `tests/`.
 - `zizmor`, a security linter for GitHub Actions, over the workflows, the example callers in `examples/`, and `.github/dependabot.yml`.
 - `actions-lock`, which checks the workflow lockfile.
 
@@ -246,24 +253,70 @@ The unit tests need `python3` (3.10 or later), `bash` and `yq`, and no network: 
 python3 -m unittest discover --start-directory tests
 ```
 
+The `tests` check runs them on Python 3.10, 3.12 and 3.14.
+3.10 is the oldest Python the steps support.
+3.14 is the Python on GitHub's `ubuntu-latest` runners now, which the reusable workflow uses.
+
 ### Adding a unit test
 
 `tests/harness.py` runs one step of the reusable workflow on its own:
 
-- `run_step(job, step_id, env, api_url=..., repository=...)` runs the step's file from `steps/` (or, for an inline step, reads its script out of the workflow with `yq`) with `python3`, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`), its `::error::` annotations (`.errors()`) and its `::warning::` annotations (`.warnings()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`, `GITHUB_API_URL` (`api_url`) and `GITHUB_REPOSITORY` (`repository`).
+- `run_step(job, step_id, env, api_url=..., repository=...)` runs the step's file from `steps/` with `python3`, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`), its `::error::` annotations (`.errors()`) and its `::warning::` annotations (`.warnings()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`, `GITHUB_API_URL` (`api_url`) and `GITHUB_REPOSITORY` (`repository`).
 - `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body (and, optionally, headers to add, such as a redirect's `Location`), to `StubServer.HANG` for an answer that never comes, to `StubServer.DROP` for a connection closed without one, or to `StubServer.drip(status)` for an answer whose body never ends, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
 - `substitutions` replaces text in the step's code before it runs, such as a timeout constant lowered so a test does not wait, or the routine API's fixed address swapped for the stand-in server's. For a step file, the code includes `steps/helpers.py`. Each piece of text must appear exactly once in all of it. The files in `steps/` are not changed: the harness runs a changed copy.
 - `run_step_as_written(job, step_id, env)` runs a step's `run` script exactly as the workflow writes it, with `bash`. It checks what a step does around its file, such as when the file was not checked out.
 
-1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
+The harness finds a step's file through the workflow: it reads the step's `STEP_FILE` with `yq` and runs that file from `steps/`.
+`yq` reads only the workflow's structure, such as job names, step ids, `env` and settings, and the short `bash` scripts that start each file.
+No Python code is read out of the workflow.
+
+1. Add a test method to the step's test file, such as `tests/test_lookup.py` or `tests/test_react.py`. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
 2. Run the unit tests and check the new test passes.
 
-An inline step cannot import `steps/helpers.py`, so it keeps its own copy of the shared code: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener` and `escaped`, and `error`, `warning` and `output` in each step that has them.
-The only inline step left is the 👀 reaction.
-`tests/test_python_steps.py` lists the inline steps and checks that every copy in them is identical to `steps/helpers.py`, so a change to the module must be made to every copy too.
-A new inline step fails the tests until it is added to that list.
+To add a new Python step:
 
-`tests/test_decision_file.py` checks that each file the workflow runs from its checkout exists in this repository and is included in the checkout of its own job, and that the `decide` and `fire` jobs check out this repository in the same way. So a renamed file fails the tests rather than every run.
+1. Write it as a file in `steps/`, importing what it needs from `steps/helpers.py`. Give it a name that is not a standard library module's, such as `notify.py` rather than `email.py`: a test checks this. Give every function type hints, and add the module to the list of step files in `pyproject.toml` (see [Linting and type checking](#linting-and-type-checking)).
+2. In the workflow, give the step an `id`, its file as `STEP_FILE` in its `env`, and a `bash` script that runs the file, or does something safe if the file is missing. If its job has no checkout of this repository yet, copy the `checkout` step from the `fire` job to the start of the job.
+3. Add `tests/test_<step>.py`, running the file with `run_step`, and the `bash` script with `run_step_as_written`.
+
+`tests/test_decision_file.py` checks that each file the workflow runs from its checkout exists in this repository and is included in the checkout of its own job, and that the `decide`, `fire` and `react` jobs check out this repository in the same way. So a renamed file fails the tests rather than every run.
+
+### Linting and type checking
+
+[Ruff](https://docs.astral.sh/ruff/) finds likely mistakes and unsafe code in the Python files.
+[mypy](https://mypy.readthedocs.io/) checks their types.
+Both check every Python file in this repository, as written for Python 3.10, and the check fails on any finding.
+Their settings are in `pyproject.toml`, which holds nothing else: this repository is not a Python package.
+
+The files in `steps/` must have type hints on every function, so that mypy checks every call between them.
+A new step file must be added to the list of step files in `pyproject.toml`.
+In `tests/`, mypy checks the code inside each function, with or without type hints.
+
+Fix a finding where you can.
+If the code is right as it is, add a comment on the line that names the rule and gives the reason, such as:
+
+```python
+except Exception as failure:  # noqa: BLE001 Anything unexpected still ends as a reported lookup-failed.
+```
+
+To run them yourself, install the pinned versions into a virtual environment, then run them from the repository's root:
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install --require-hashes --requirement .github/python-checks/requirements.txt
+.venv/bin/ruff check .
+.venv/bin/mypy
+```
+
+Ruff and mypy are installed only for this repository's own checks.
+The reusable workflow installs nothing: it runs its steps with the runner's `python3`.
+
+`.github/python-checks/requirements.txt` pins Ruff, mypy and every package mypy needs, each by version and the hash of every file PyPI publishes for it.
+Nothing updates these pins, because Dependabot does not read them, so update them by hand:
+
+1. Pick a release at least 7 days old.
+2. Change its version in the file, and replace its hashes with those listed at `https://pypi.org/pypi/<package>/<version>/json`.
+3. For mypy, check the packages it needs, listed in that file under `requires_dist`, and add or update any that changed in the same way.
 
 ### Security checks
 

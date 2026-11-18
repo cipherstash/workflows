@@ -10,13 +10,14 @@ Python's standard library only (3.10 features); tests/test_report.py runs this f
 
 import json
 import os
+from typing import Any
 
 from helpers import output
 
 FAILED = '{"decision":"skip","reason":"decision-failed"}'
 
 
-def finished(value):
+def finished(value: str) -> dict[str, Any] | None:
     """The decision value parsed, if it is a finished decision (a skip or a fire), or else None."""
     try:
         decision = json.loads(value)
@@ -27,12 +28,12 @@ def finished(value):
     return None
 
 
-def text(value):
+def text(value: object) -> str:
     # As jq's string interpolation: a string as it is, anything else as JSON.
     return value if isinstance(value, str) else json.dumps(value)
 
 
-def summary(decision):
+def summary(decision: dict[str, Any]) -> str:
     if decision.get("decision") == "fire":
         pull_request = decision.get("pull_request")
         number = pull_request.get("number") if isinstance(pull_request, dict) else None
@@ -61,6 +62,6 @@ try:
     print(line, flush=True)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as file:
         file.write(line + "\n")
-except Exception as failure:  # The decision-failed skip, written first, stands.
+except Exception as failure:  # noqa: BLE001 The decision-failed skip, written first, stands.
     print(f"::error::Could not report the request decision ({type(failure).__name__})", flush=True)
 

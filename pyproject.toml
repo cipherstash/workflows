@@ -12,11 +12,18 @@ line-length = 120
 # error and warning rules.
 select = ["E", "W", "F", "I", "B", "BLE", "UP", "RUF", "SIM", "C4", "PIE", "S", "PLE", "PLW"]
 
+[tool.ruff.lint.per-file-ignores]
+# The tests run yq, git, bash, the test scripts and the step files as processes, found on the PATH, on purpose: that
+# is how the runner runs them (S603, S607). Their tokens are made-up values that the tests check never leak (S105,
+# S106).
+"tests/**" = ["S603", "S607", "S105", "S106"]
+
 [tool.mypy]
-# Checks steps/ and tests/ as written for Python 3.10, whichever Python runs mypy. Each file there is its own
-# top-level module, as when python3 runs it with its directory first on the path.
+# Checks every Python file in the repository (steps/, tests/ and any other) as written for Python 3.10, whichever
+# Python runs mypy. No directory is a package, so each file is a top-level module named after it, as when python3
+# runs it with its own directory first on the path.
 python_version = "3.10"
-files = ["steps", "tests"]
+files = ["."]
 # Checks the body of every function, typed or not.
 check_untyped_defs = true
 warn_unused_ignores = true
@@ -25,7 +32,7 @@ warn_redundant_casts = true
 # The step files, which are what the reusable workflow runs, are fully typed so that mypy checks every call between
 # them. A new step file is added to this list.
 [[tool.mypy.overrides]]
-module = ["fire", "helpers", "lookup", "report"]
+module = ["fire", "helpers", "lookup", "react", "report"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_calls = true
