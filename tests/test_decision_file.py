@@ -1,8 +1,8 @@
 """The workflow's paths to the files it checks out from this repository must point at real files in this repository.
 
-The decide job checks out the request decision and the Python step files from this repository, and the fire job checks
-out the step files, and each runs them by path. A rename would pass every other test and fail only in production, where
-every run would end as decision-failed or with no review requested.
+The decide job checks out the request decision and the Python step files from this repository, and the fire and react
+jobs check out the step files, and each runs them by path. A rename would pass every other test and fail only in
+production, where every run would end as decision-failed, with no review requested, or with no reaction.
 """
 
 import functools
