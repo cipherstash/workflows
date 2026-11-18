@@ -201,7 +201,7 @@ Every pull request, and every push to `main`, runs these checks:
   It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
 - A check of `request-decision/test` itself, run by `request-decision/test-runner`.
 - The unit tests of the Python steps, in `tests/`.
-- `zizmor`, a security linter for GitHub Actions, over the same files and `.github/dependabot.yml`.
+- `zizmor`, a security linter for GitHub Actions, over the workflows, the example callers in `examples/`, and `.github/dependabot.yml`.
 - `actions-lock`, which checks the workflow lockfile.
 
 The request decision's rules are tested against saved event payloads. `request-decision/test` runs `request-decision/decision.jq` on each one, so the tests need no network and run anywhere with `bash` and `jq`:
@@ -262,6 +262,21 @@ It is made by the `gh actions-lock` command and is never edited by hand.
 The lockfile is not committed yet, so `actions-lock` only warns for now.
 Once it is committed, `actions-lock` fails if the lockfile does not match the workflows.
 Either way, its annotation shows the lockfile `gh actions-lock` made from the pull request's workflows.
+Once the base branch has the lockfile, a pull request that deletes it fails the check.
+The check is `.github/scripts/check-lock`, tested by `tests/test_check_lock.py`.
+
+#### Updating gh-actions-lock
+
+The `actions-lock` job installs a pinned release of the `gh-actions-lock` extension.
+Nothing updates the pin, because Dependabot does not read it, so update it by hand when a new release comes out:
+
+1. Pick the release at <https://github.com/github/gh-actions-lock/releases>.
+2. Set `GH_ACTIONS_LOCK_VERSION` in `.github/workflows/checks.yml` to its tag.
+3. Set `GH_ACTIONS_LOCK_SHA256` to the SHA-256 digest that the release page lists for the `linux-amd64` file.
+4. Check the digest yourself if you can: download the file and run `sha256sum` on it.
+
+The current hash was taken from the digest the v0.4.1 release lists, and was not checked against another source (trust on first use).
+The job fails if the downloaded file does not match the hash.
 
 Dependabot (`.github/dependabot.yml`) checks the actions every week and opens a pull request to update one.
 It waits until a new version is 7 days old, so a bad release has time to be found first.

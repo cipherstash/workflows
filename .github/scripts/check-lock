@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Checks the workflow lockfile, .github/workflows/actions.lock, for the actions-lock job in
+# .github/workflows/checks.yml. Run from the root of the repository, with `gh actions-lock` installed.
+#
+# - The lockfile is in the pull request: it fails unless `gh actions-lock --verify` passes and running
+#   `gh actions-lock` changes nothing, neither the lockfile nor the workflows.
+# - The lockfile is missing, but the pull request's base branch has it: fails, so deleting the lockfile cannot pass.
+# - Neither has it: only warns, so that the lockfile can be added later.
+#
+# Every outcome but a pass prints an annotation that carries what `gh actions-lock` made from the workflows, so it can
+# be reviewed and committed without installing the extension.
+#
+# Environment: BASE_REF is the pull request's base branch, empty outside a pull request. GH_TOKEN is the token for
+# `gh actions-lock`, and for fetching the base branch.
+set -uo pipefail
+
+lockfile=.github/workflows/actions.lock
+base_ref="${BASE_REF:-}"
+
+# Output of `gh actions-lock` comes from the pull request's workflows and could print workflow commands, such as
+# `::add-mask::`. The runner ignores workflow commands between these two lines, and only a command that carries this
+# random token ends that.
+token="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+
+# Runs a command with its output shielded, and keeps its exit status in $status.
+shielded() {
+  echo "::stop-commands::$token"
+  "$@"
+  status=$?
+  echo "::$token::"
+}
+
+# Escapes text for a workflow command's message, ending each line with an escaped line break so that the message stays
+# on one line.
+escape() { sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk 'BEGIN { ORS = "%0A" } { print }'; }
+
+# Prints one annotation of level $1 and title $2: $3, then what `gh actions-lock` made.
+report() {
+  printf '::%s file=%s,title=%s::%s%%0A' "$1" "$lockfile" "$2" "$3"
+  git status --short -- .github/workflows | escape
+  if [ -f "$lockfile" ]; then
+    printf 'SHA-256 of the lockfile it made: %s%%0ABase64: %s%%0A' \
+      "$(sha256sum "$lockfile" | cut -d' ' -f1)" "$(base64 --wrap=0 "$lockfile")"
+    escape <"$lockfile"
+  fi
+  printf '%%0A'
+  git diff -- .github/workflows ':!.github/workflows/actions.lock' | escape
+  echo
+}
+
+# Whether the base branch has the lockfile. A base branch that cannot be fetched fails the check, because a missing
+# lockfile could then pass unnoticed.
+base_has_lockfile=false
+if [ -n "$base_ref" ]; then
+  # The checkout does not keep the token, so it is given to this one fetch.
+  auth="$(printf 'x-access-token:%s' "${GH_TOKEN:-}" | base64 --wrap=0)"
+  if ! git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch --quiet --no-tags --depth=1 origin \
+    "+refs/heads/$base_ref:refs/remotes/origin/$base_ref"; then
+    echo "::error file=$lockfile,title=Base branch not fetched::Could not fetch the base branch, so the check cannot tell whether it has $lockfile."
+    exit 1
+  fi
+  if git cat-file -e "origin/$base_ref:$lockfile" 2>/dev/null; then
+    base_has_lockfile=true
+  fi
+fi
+
+# Runs `gh actions-lock` once, to make the lockfile and rewrite the workflows as it would, for the annotation.
+make_lock() {
+  shielded gh actions-lock --no-interactive
+  lock_status=$status
+  if [ "$lock_status" -ne 0 ]; then
+    echo "::error title=gh actions-lock failed::gh actions-lock itself failed (exit status $lock_status); this is not a finding about the workflows. See the log."
+  fi
+}
+
+if [ ! -f "$lockfile" ]; then
+  make_lock
+  if [ "$base_has_lockfile" = true ]; then
+    report error "Workflow lockfile deleted" \
+      "$lockfile is on the base branch $base_ref but is missing here. Restore it, or run gh actions-lock. gh actions-lock made these changes:"
+    exit 1
+  fi
+  report warning "No workflow lockfile yet" \
+    "Not checked: $lockfile is not committed. gh actions-lock would make these changes:"
+  exit 0
+fi
+
+shielded gh actions-lock --verify
+verify_status=$status
+make_lock
+if [ "$verify_status" -eq 0 ] && [ "$lock_status" -eq 0 ] && git diff --quiet -- .github/workflows; then
+  exit 0
+fi
+report error "Workflow lockfile out of date" \
+  "Run gh actions-lock and commit the result. gh actions-lock made these changes:"
+exit 1
