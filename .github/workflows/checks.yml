@@ -21,9 +21,12 @@ jobs:
           persist-credentials: false
       # Go's module proxy and checksum database verify the pinned version. shellcheck, which actionlint uses for
       # `run:` scripts, is preinstalled on ubuntu-latest. Files are named explicitly so the example caller workflows,
-      # which are not under .github/workflows, are linted too.
+      # which are not under .github/workflows, are linted too. Each error is printed as an error annotation, so it shows
+      # on the check run without opening the log.
       - name: actionlint
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color .github/workflows/*.yml examples/*.yml
+        env:
+          FORMAT: '{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}}::{{$err.Message}} [{{$err.Kind}}]{{"\n"}}{{end}}'
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -format "$FORMAT" .github/workflows/*.yml examples/*.yml
 
   request-decision:
     runs-on: ubuntu-latest
