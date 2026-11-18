@@ -91,8 +91,8 @@ class CheckoutStepsTest(unittest.TestCase):
     def jobs(self):
         return sorted({job for job, _ in file_steps()})
 
-    def test_the_decide_and_fire_jobs_check_out_this_repository(self):
-        self.assertEqual(self.jobs(), ["decide", "fire"])
+    def test_the_decide_fire_and_react_jobs_check_out_this_repository(self):
+        self.assertEqual(self.jobs(), ["decide", "fire", "react"])
 
     def test_each_checkout_is_the_same_apart_from_its_name_and_sparse_patterns(self):
         # Compared value by value, because each yq prints a whole step differently (one keeps its comments).
@@ -119,6 +119,17 @@ class CheckoutStepsTest(unittest.TestCase):
                 self.assertEqual(_yq(query + ".with.ref").strip(), "${{ job.workflow_sha }}")
                 self.assertEqual(_yq(query + '.with."persist-credentials"').strip(), "false")
                 self.assertEqual(_yq(query + '.with."sparse-checkout-cone-mode"').strip(), "false")
+
+class NoReactionWithoutASentRequestTest(unittest.TestCase):
+    """The react job runs only once the fire job's send step said sent. If the fire job's checkout failed, its step sends
+    nothing and writes no sent output, so the comment gets no reaction."""
+
+    def test_the_fire_jobs_sent_output_is_the_send_steps_alone(self):
+        self.assertEqual(_yq(".jobs.fire.outputs.sent").strip(), "${{ steps.send.outputs.sent }}")
+
+    def test_the_react_job_runs_only_when_the_request_was_sent(self):
+        self.assertTrue(_yq(".jobs.react.if").strip().startswith("needs.fire.outputs.sent == 'true'"))
+
 
 if __name__ == "__main__":
     unittest.main()
