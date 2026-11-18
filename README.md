@@ -194,6 +194,8 @@ Every pull request, and every push to `main`, runs these checks:
   It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
 - A check of `request-decision/test` itself, run by `request-decision/test-runner`.
 - The unit tests of the Python steps, in `tests/`.
+- `zizmor`, a security linter for GitHub Actions, over the same files and `.github/dependabot.yml`.
+- `actions-lock`, which checks the workflow lockfile.
 
 The request decision's rules are tested against saved event payloads. `request-decision/test` runs `request-decision/decision.jq` on each one, so the tests need no network and run anywhere with `bash` and `jq`:
 
@@ -233,3 +235,26 @@ An inline step cannot import `steps/helpers.py`, so it keeps its own copy of the
 The check goes when the last inline step moves into a file.
 
 `tests/test_decision_file.py` checks that each file the workflow runs from its checkout exists in this repository and is included in the checkout, so a renamed file fails the tests rather than every run.
+
+### Security checks
+
+[zizmor](https://docs.zizmor.sh/) looks for security problems in the workflows, such as untrusted text used in a script, more permissions than a job needs, or a risky trigger.
+It runs version 1.32.0, installed from `.github/zizmor/requirements.txt`, which pins the version and the hash of every file.
+The check fails on any finding.
+Fix the finding, or, if the risk is accepted, add a comment on the line zizmor reports that names the audit and gives the reason:
+
+```yaml
+  issue_comment: # zizmor: ignore[dangerous-triggers] only a team member's command is acted on
+```
+
+zizmor's findings show as annotations on the pull request's changed files.
+
+The workflow lockfile, `.github/workflows/actions.lock`, records the exact commit of every action the workflows use.
+It is made by the `gh actions-lock` command and is never edited by hand.
+The lockfile is not committed yet, so `actions-lock` only warns for now.
+Once it is committed, `actions-lock` fails if the lockfile does not match the workflows.
+Either way, its annotation shows the lockfile `gh actions-lock` made from the pull request's workflows.
+
+Dependabot (`.github/dependabot.yml`) checks the actions every week and opens a pull request to update one.
+It waits until a new version is 7 days old, so a bad release has time to be found first.
+Once the lockfile is committed, Dependabot updates it in the same pull request as the action.
