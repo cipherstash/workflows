@@ -1,6 +1,6 @@
 # Checks every pull request to this repository, and every push to main: lints and audits the workflows and the example
-# callers, checks the workflow lockfile, checks the request decision's test script, runs the request decision's saved
-# cases, and runs the unit tests of the reusable workflow's Python steps.
+# callers, checks the workflow lockfile, lints and type-checks the Python, and runs the request decision's saved cases
+# and the unit tests of the reusable workflow's Python steps on Python 3.10, 3.12 and 3.14.
 name: Checks
 
 on:
@@ -26,7 +26,9 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color .github/workflows/*.yml examples/*.yml
 
   # Audits the workflows, the example callers and the Dependabot configuration for security problems. Fails on any
-  # finding, of any severity, with zizmor's default ("regular") persona. A finding is either fixed or accepted with
+  # finding, of any severity, with zizmor's default ("regular") persona. zizmor exits with 11 to 14 when it has
+  # findings, whatever the output format; only --format=sarif and --no-exit-codes (and --fix, once it fixed
+  # everything) turn that off, so --format=github fails the job. See "Exit codes" at https://docs.zizmor.sh/usage/. A finding is either fixed or accepted with
   # an inline `# zizmor: ignore[<audit>] <reason>` comment on the line zizmor reports. Findings show as annotations
   # on the pull request.
   zizmor:
@@ -67,8 +69,8 @@ jobs:
     permissions:
       contents: read
     env:
-      GH_TOKEN: ${{ github.token }}
-      # The gh-actions-lock extension's release, and the SHA-256 of its linux-amd64 binary as the release lists it.
+      # The gh-actions-lock extension's release, and the SHA-256 of its linux-amd64 binary as the release lists it. To
+      # update them, see "Updating gh-actions-lock" in the README.
       GH_ACTIONS_LOCK_VERSION: v0.4.1
       GH_ACTIONS_LOCK_SHA256: 39deb2fe714dbf74b073d8245fc7f3d50cd0eee18d5c0900e9e849ae933ae17e
     steps:
@@ -79,6 +81,8 @@ jobs:
       # against its hash, and installed from a local directory instead. gh installs a local extension from the current
       # directory only, and the directory's name must be the extension's.
       - name: Install gh-actions-lock
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           dir="$RUNNER_TEMP/gh-actions-lock"
           mkdir -p "$dir"
@@ -88,79 +92,75 @@ jobs:
           chmod +x "$dir/gh-actions-lock"
           (cd "$dir" && gh extension install .)
           gh actions-lock --version
+      # The logic is in .github/scripts/check-lock, which tests/test_check_lock.py tests. BASE_REF goes in the
+      # environment rather than into the script text, so that nothing from the pull request is read as shell.
       - name: Check the lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
+        run: .github/scripts/check-lock
+
+  # Lints the repository's Python (steps/, tests/ and any other file) with Ruff and type-checks it with mypy, as
+  # configured in pyproject.toml. Both run even if the other fails, and either fails the check on any finding.
+  python-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Pinned by version with hashes, mypy's dependencies included, in .github/python-checks/requirements.txt.
+      # Installed into its own virtual environment because the runner's Python does not allow installing packages
+      # into it. Wheels only, so no package's build step runs.
+      - name: Install Ruff and mypy
+        id: install
         run: |
-          lockfile=.github/workflows/actions.lock
-          # Escapes text for a workflow command's message, ending each line with an escaped line break so that the
-          # message stays on one line.
-          escape() { sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk 'BEGIN { ORS = "%0A" } { print }'; }
-          # Writes one annotation of level $1 and title $2: $3, then what `gh actions-lock` made.
-          report() {
-            {
-              printf '::%s file=%s,title=%s::%s%%0A' "$1" "$lockfile" "$2" "$3"
-              git status --short -- .github/workflows | escape
-              if [ -f "$lockfile" ]; then
-                printf 'SHA-256 of the lockfile it made: %s%%0ABase64: %s%%0A' \
-                  "$(sha256sum "$lockfile" | cut -d' ' -f1)" "$(base64 --wrap=0 "$lockfile")"
-                escape < "$lockfile"
-              fi
-              printf '%%0A'
-              git diff -- .github/workflows ':!.github/workflows/actions.lock' | escape
-              echo
-            }
-          }
-          if [ ! -f "$lockfile" ]; then
-            gh actions-lock --no-interactive || true
-            report warning "No workflow lockfile yet" \
-              "Not checked: $lockfile is not committed. gh actions-lock would make these changes:"
-            exit 0
-          fi
-          if gh actions-lock --verify && gh actions-lock --no-interactive && git diff --quiet -- .github/workflows; then
-            exit 0
-          fi
-          gh actions-lock --no-interactive || true
-          report error "Workflow lockfile out of date" \
-            "Run gh actions-lock and commit the result. gh actions-lock made these changes:"
-          exit 1
+          python3 -m venv "$RUNNER_TEMP/python-checks"
+          "$RUNNER_TEMP/python-checks/bin/pip" install --quiet --only-binary :all: --require-hashes \
+            --requirement .github/python-checks/requirements.txt
+          "$RUNNER_TEMP/python-checks/bin/ruff" --version
+          "$RUNNER_TEMP/python-checks/bin/mypy" --version
+      - name: Ruff
+        run: '"$RUNNER_TEMP/python-checks/bin/ruff" check --output-format=github .'
+      # mypy checks the files listed in pyproject.toml, for Python 3.10, whichever Python runs it.
+      - name: mypy
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: '"$RUNNER_TEMP/python-checks/bin/mypy"'
 
-  request-decision:
+  # Runs both test seams on each Python version a GitHub-hosted Ubuntu runner may provide: the request decision's
+  # saved cases (and the check of their test script) and the unit tests of the reusable workflow's Python steps. 3.10
+  # is the oldest the steps support, and 3.14 is the Python of ubuntu-latest today. jq and yq are the ones preinstalled
+  # on ubuntu-latest, which setup-python leaves on the PATH. The tests need nothing installed and no network beyond
+  # 127.0.0.1.
+  tests:
+    name: tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Check the test script
-        run: request-decision/test-runner
-      - name: Run the saved cases
-        run: request-decision/test
-
-  unit-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # The runner's own python3 and yq; the tests need nothing installed and no network beyond 127.0.0.1.
-      - name: Run the unit tests
-        run: python3 -m unittest discover --start-directory tests --verbose
-
-  # The reusable workflow's Python steps keep to Python 3.10, so they must still run there. Runs the same tests as
-  # unit-tests, on the oldest supported Python. yq is the one preinstalled on ubuntu-latest, which setup-python leaves
-  # on the PATH.
-  unit-tests-python-3-10:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12', '3.14']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.10'
-      - name: Run the unit tests on Python 3.10
+          python-version: ${{ matrix.python-version }}
+      - name: Show the versions
         run: |
           python3 --version
+          jq --version
           yq --version
-          python3 -m unittest discover --start-directory tests --verbose
+      - name: Check the saved cases' test script
+        run: request-decision/test-runner
+      - name: Run the saved cases
+        if: ${{ !cancelled() }}
+        run: request-decision/test
+      - name: Run the unit tests
+        if: ${{ !cancelled() }}
+        run: python3 -m unittest discover --start-directory tests --verbose

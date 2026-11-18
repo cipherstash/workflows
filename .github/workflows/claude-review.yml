@@ -236,13 +236,15 @@ jobs:
           CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
           TRIGGER_ID: ${{ inputs.routine-trigger-id }}
           DECISION: ${{ needs.decide.outputs.decision }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
           # The routine call's file, from this repository's checkout. Python's standard library only (3.10 features), so
           # nothing is installed; tests/test_fire.py runs this file.
           STEP_FILE: ${{ github.workspace }}/.cipherstash-workflows/steps/fire.py
-        # Without the checked-out file (the checkout failed), nothing is sent: the step reports an error and fails,
-        # which continue-on-error keeps from turning the check red.
+        # Without the checked-out files (the checkout failed, or fire.py or its helper module is missing), nothing is sent:
+        # the step reports one error and fails, which continue-on-error keeps from turning the check red. The helper is
+        # checked here because fire.py imports it before it can report anything itself.
         run: |
-          if [[ -f "$STEP_FILE" ]]; then
+          if [[ "$CHECKOUT_OUTCOME" == success && -f "$STEP_FILE" && -f "${STEP_FILE%/*}/helpers.py" ]]; then
             exec python3 "$STEP_FILE"
           fi
           echo "::error::Could not get the routine call's step file (checkout failed or file missing); no review was requested"
