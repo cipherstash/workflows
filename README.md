@@ -3,7 +3,8 @@
 Reusable GitHub Actions workflows shared by CipherStash repositories.
 
 The first one asks Claude to review a pull request.
-It is being built; the plan is in [issue #1](https://github.com/cipherstash/workflows/issues/1).
+It is being built.
+The plan is in [issue #1](https://github.com/cipherstash/workflows/issues/1).
 
 The words this repository uses, such as *review request* and *team member*, are defined in [CONTEXT.md](CONTEXT.md).
 
@@ -108,10 +109,12 @@ The unit tests in `tests/` read each step's script out of the workflow, so they 
 
 ## Checks
 
-Every pull request runs three checks:
+Every pull request, and every push to `main`, runs these checks:
 
 - `actionlint` over the workflows in this repository and the example callers in `examples/`.
 - The request decision's saved cases, run by `request-decision/test`.
+  It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
+- A check of `request-decision/test` itself, run by `request-decision/test-runner`.
 - The unit tests of the Python steps, in `tests/`.
 
 The request decision's rules are tested against saved event payloads, so the tests need no network and run anywhere with `bash`, `jq` and `yq`:
