@@ -87,7 +87,9 @@ jobs:
               # review, the second says why the review was requested.
               | .text = "Review pull request #\($pr.number) in \($event_repo): \($pr.html_url)\n\nKind of review request: \(.kind)."
             ) as $fire
-          | if $pr.draft == true then skip("draft")
+          # A payload with no author is not one this decision can act on: there is no one to look up or credit.
+          | if $pr.user == null then skip("not-a-review-request")
+            elif $pr.draft == true then skip("draft")
             elif $pr.user.type == "Bot" then skip("bot")
             elif $pr.head.repo == null or $pr.head.repo.full_name != $pr.base.repo.full_name then skip("fork")
             elif is_review_agent($pr.user.login) then $fire
