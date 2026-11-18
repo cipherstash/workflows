@@ -160,7 +160,9 @@ class GivenTheRoutineCannotBeReached(FireTest):
         result = self.fire(
             {FIRE_PATH: StubServer.HANG}, substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"}
         )
-        self.assert_not_sent(result, "Could not reach the routine trigger")
+        self.assert_not_sent(result, "The routine trigger did not answer in time (")
+        self.assertNotIn("no review was requested", result.errors()[0])
+        self.assertIn("check for a review before re-running", result.errors()[0])
         self.assertEqual(len(self.stub.requests), 1, "the request was retried")
 
     def test_an_answer_that_never_comes_is_cut_off_after_the_total_time(self):
@@ -169,18 +171,23 @@ class GivenTheRoutineCannotBeReached(FireTest):
         result = self.fire({FIRE_PATH: StubServer.HANG},
                            substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
         elapsed = time.monotonic() - started
-        self.assert_not_sent(result, "Could not reach the routine trigger (TotalTimeout)")
+        self.assert_not_sent(result, "The routine trigger did not answer in time (TotalTimeout)")
+        self.assertNotIn("no review was requested", result.errors()[0])
         self.assertLess(elapsed, 5, "the request ran on past its total time")
         self.assertEqual(len(self.stub.requests), 1, "the request was retried")
 
     def test_a_connection_closed_without_an_answer_is_not_sent(self):
         result = self.fire({FIRE_PATH: StubServer.DROP})
-        self.assert_not_sent(result, "Could not reach the routine trigger")
+        # The request was sent before the connection dropped, so the routine may have accepted it.
+        self.assert_not_sent(result, "The routine trigger dropped the connection (")
+        self.assertNotIn("no review was requested", result.errors()[0])
+        self.assertIn("check for a review before re-running", result.errors()[0])
         self.assertEqual(len(self.stub.requests), 1, "the request was retried")
 
     def test_a_refused_connection_is_not_sent(self):
         result = self.fire(base_url=closed_port_url())
-        self.assert_not_sent(result, "Could not reach the routine trigger")
+        self.assert_not_sent(result, "Could not reach the routine trigger (")
+        self.assertIn("no review was requested", result.errors()[0])
 
 
 class GivenTheStepIsNotSetUp(FireTest):

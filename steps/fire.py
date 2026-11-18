@@ -26,6 +26,23 @@ EXCERPT_CHARACTERS = 200
 TRIGGER_ID = re.compile(r"trig_[A-Za-z0-9]+")
 
 
+# Failures that can come after the request went out, so the routine may have accepted it. Every other failure (a refused
+# connection, a name that does not resolve, a TLS error) comes before anything is sent. A connect that times out also
+# shows as a timeout; it is reported as unknown, which is the safe side.
+TIMED_OUT = frozenset({"TimeoutError", "timeout", "TotalTimeout"})
+DROPPED = frozenset(
+    {
+        "RemoteDisconnected",
+        "ConnectionResetError",
+        "ConnectionAbortedError",
+        "BrokenPipeError",
+        "BadStatusLine",
+        "IncompleteRead",
+    }
+)
+CHECK_FIRST = "the request may have been received, so check for a review before re-running"
+
+
 class NotSent(Exception):
     """The request was not sent, or the routine trigger did not accept it; the message says why."""
 
@@ -61,6 +78,10 @@ def post(url: str, token: str, body: bytes) -> tuple[int, bytes]:
         # error answer's body is read for the excerpt in the error annotation.
         return send(request, read_error_bytes=4096)
     except Unreachable as failure:
+        if failure.kind in TIMED_OUT:
+            raise NotSent(f"The routine trigger did not answer in time ({failure.kind}); {CHECK_FIRST}") from None
+        if failure.kind in DROPPED:
+            raise NotSent(f"The routine trigger dropped the connection ({failure.kind}); {CHECK_FIRST}") from None
         raise NotSent(f"Could not reach the routine trigger ({failure.kind}); no review was requested") from None
 
 

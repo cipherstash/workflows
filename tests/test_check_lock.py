@@ -94,10 +94,11 @@ class GivenTheLockfileIsInThePullRequest(CheckLockTest):
         self.assertIn("title=Workflow lockfile out of date", result.stdout)
 
     def test_it_fails_when_the_lockfile_run_changes_the_workflows(self):
-        result = self.run_script(FAKE_REWRITE="# changed")
+        summary = self.tmp / "summary.md"
+        result = self.run_script(FAKE_REWRITE="# changed", GITHUB_STEP_SUMMARY=str(summary))
         self.assertEqual(result.returncode, 1)
         self.assertIn("title=Workflow lockfile out of date", result.stdout)
-        self.assertIn("# changed", result.stdout)
+        self.assertIn("# changed", summary.read_text(encoding="utf-8"))
 
     def test_it_says_so_when_the_tool_itself_fails(self):
         result = self.run_script(FAKE_LOCK_EXIT="3")
@@ -143,18 +144,48 @@ class GivenAnAnnotation(CheckLockTest):
     def setUp(self):
         super().setUp()
         self.base_branch(with_lockfile=False)
+        self.summary = self.tmp / "summary.md"
 
-    def test_it_stays_on_one_line_and_escapes_the_lockfile(self):
-        result = self.run_script(FAKE_LOCK_CONTENT="100% done\r\n::set-output name=x::y")
-        (annotation,) = self.annotations(result)
-        self.assertIn("100%25 done%0D%0A::set-output name=x::y%0A", annotation)
-        self.assertNotIn("\r", annotation)
+    def summary_text(self):
+        return self.summary.read_text(encoding="utf-8") if self.summary.exists() else ""
 
-    def test_it_carries_the_workflow_changes(self):
-        result = self.run_script(FAKE_REWRITE="# pinned")
+    def run_with_summary(self, **env):
+        return self.run_script(GITHUB_STEP_SUMMARY=str(self.summary), **env)
+
+    def test_it_stays_short_and_points_to_the_job_summary(self):
+        # GitHub caps an annotation's size, so the lockfile and the diff go to the job summary instead.
+        result = self.run_with_summary(FAKE_LOCK_CONTENT="x" * 5000, FAKE_REWRITE="# pinned")
         (annotation,) = self.annotations(result)
-        self.assertIn(" M .github/workflows/w.yml%0A", annotation)
-        self.assertIn("+# pinned%0A", annotation)
+        self.assertLess(len(annotation), 500, annotation)
+        self.assertIn("job summary", annotation)
+        self.assertNotIn("xxxx", annotation)
+        self.assertNotIn("# pinned", annotation)
+        self.assertNotIn("\n", annotation)
+
+    def test_the_summary_carries_the_whole_lockfile_unescaped(self):
+        result = self.run_with_summary(FAKE_LOCK_CONTENT="100% done\r\n::set-output name=x::y")
+        self.assertEqual(len(self.annotations(result)), 1)
+        text = self.summary_text()
+        self.assertIn("100% done", text)
+        self.assertIn("::set-output name=x::y", text)
+        self.assertIn("SHA-256", text)
+        self.assertIn("Base64", text)
+
+    def test_the_summary_carries_the_workflow_changes(self):
+        self.run_with_summary(FAKE_REWRITE="# pinned")
+        text = self.summary_text()
+        self.assertIn(" M .github/workflows/w.yml", text)
+        self.assertIn("+# pinned", text)
+
+    def test_the_summary_is_added_to_not_replaced(self):
+        self.summary.write_text("earlier step\n")
+        self.run_with_summary(FAKE_LOCK_CONTENT="made")
+        self.assertTrue(self.summary_text().startswith("earlier step\n"))
+
+    def test_it_still_annotates_when_there_is_no_summary_file(self):
+        result = self.run_script(FAKE_LOCK_CONTENT="made")
+        (annotation,) = self.annotations(result)
+        self.assertIn("title=No workflow lockfile yet", annotation)
 
     def test_it_shields_the_tools_output_from_workflow_commands(self):
         result = self.run_script(FAKE_NOISE="::add-mask::secret")
