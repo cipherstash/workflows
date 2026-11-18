@@ -1,0 +1,162 @@
+"""The fire job's send step: how each answer the routine trigger can give becomes sent, or an error."""
+
+import json
+import unittest
+
+from harness import StubServer, closed_port_url, run_step
+
+TOKEN = "sk-ant-unitTestRoutineTokenThatMustNeverBePrinted0001"
+TRIGGER_ID = "trig_01AbCdEf"
+FIRE_PATH = f"/v1/claude_code/routines/{TRIGGER_ID}/fire"
+# The step's production address, which a test swaps for the stub's. No input or event can change it.
+API_BASE_URL = "https://api.anthropic.com"
+TEXT = (
+    "Review pull request #7 in cipherstash/example: https://github.com/cipherstash/example/pull/7\n\n"
+    "Kind of review request: ready."
+)
+
+
+def decision(text=TEXT):
+    return json.dumps(
+        {
+            "decision": "fire",
+            "kind": "ready",
+            "requester": "alice",
+            "pull_request": {"number": 7, "url": "https://github.com/cipherstash/example/pull/7"},
+            "text": text,
+        },
+        separators=(",", ":"),
+    )
+
+
+def inputs(**overrides):
+    env = {"CLAUDE_ROUTINE_TOKEN": TOKEN, "TRIGGER_ID": TRIGGER_ID, "DECISION": decision()}
+    env.update(overrides)
+    return env
+
+
+class FireTest(unittest.TestCase):
+    def fire(self, routes=None, base_url=None, substitutions=None, **overrides):
+        with StubServer(routes) as stub:
+            result = run_step(
+                "fire",
+                "send",
+                inputs(**overrides),
+                substitutions={API_BASE_URL: base_url or stub.url, **(substitutions or {})},
+            )
+        self.stub = stub
+        self.assertNotIn(TOKEN, result.everything(), "the routine token was printed or written to an output")
+        return result
+
+    def assert_sent(self, result):
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.outputs, {"sent": "true"})
+        self.assertEqual(result.errors(), [])
+
+    def assert_not_sent(self, result, message):
+        # A failed request is a failed step in the run; the job's continue-on-error keeps the check green.
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("sent", result.outputs)
+        self.assertEqual(len(result.errors()), 1, result.stdout)
+        self.assertIn(message, result.errors()[0])
+
+
+class GivenTheRoutineAcceptsTheRequest(FireTest):
+    def test_each_success_status_is_sent(self):
+        for status in (200, 201, 202):
+            with self.subTest(status=status):
+                result = self.fire({FIRE_PATH: (status, json.dumps({"type": "routine_fire", "id": "ses_1"}))})
+                self.assert_sent(result)
+
+    def test_the_request_is_one_post_to_the_trigger_with_the_routine_headers(self):
+        self.fire({FIRE_PATH: (200, "{}")})
+        self.assertEqual(len(self.stub.requests), 1)
+        method, path, headers = self.stub.requests[0]
+        self.assertEqual((method, path), ("POST", FIRE_PATH))
+        self.assertEqual(headers.get("Authorization"), f"Bearer {TOKEN}")
+        self.assertEqual(headers.get("anthropic-version"), "2023-06-01")
+        self.assertEqual(headers.get("anthropic-beta"), "experimental-cc-routine-2026-04-01")
+        self.assertEqual(headers.get("Content-Type"), "application/json")
+
+    def test_the_body_is_the_decision_text_and_nothing_else(self):
+        self.fire({FIRE_PATH: (200, "{}")})
+        self.assertEqual(json.loads(self.stub.bodies[0]), {"text": TEXT})
+
+    def test_text_with_quotes_newlines_and_unicode_reaches_the_routine_unchanged(self):
+        text = 'Review "this" \\ one\nline two\r\n\ttabbed 👀 é ü   {"text": "x"} $(echo hi) `id`'
+        self.fire({FIRE_PATH: (200, "{}")}, DECISION=decision(text))
+        self.assertEqual(json.loads(self.stub.bodies[0].decode("utf-8")), {"text": text})
+
+
+class GivenTheRoutineRejectsTheRequest(FireTest):
+    def test_each_error_status_is_reported_and_not_sent(self):
+        for status in (400, 401, 500):
+            with self.subTest(status=status):
+                body = json.dumps({"type": "error", "error": {"type": "x", "message": "trigger said no"}})
+                result = self.fire({FIRE_PATH: (status, body)})
+                self.assert_not_sent(result, f"HTTP {status}")
+                self.assertIn("trigger said no", result.errors()[0])
+
+    def test_a_long_error_body_is_cut_short(self):
+        result = self.fire({FIRE_PATH: (500, "x" * 5000)})
+        self.assert_not_sent(result, "HTTP 500")
+        self.assertLess(len(result.errors()[0]), 500)
+
+    def test_an_error_body_cannot_add_a_second_annotation(self):
+        result = self.fire({FIRE_PATH: (400, "bad\n::error::injected\r\n::warning::also")})
+        self.assert_not_sent(result, "HTTP 400")
+
+    def test_an_error_body_that_echoes_the_token_does_not_print_it(self):
+        result = self.fire({FIRE_PATH: (401, json.dumps({"message": f"bad token Bearer {TOKEN}"}))})
+        self.assert_not_sent(result, "HTTP 401")
+
+    def test_a_redirect_is_not_followed_and_not_sent(self):
+        result = self.fire({FIRE_PATH: (302, "")})
+        self.assert_not_sent(result, "HTTP 302")
+        self.assertEqual(self.stub.paths(), [FIRE_PATH])
+
+
+class GivenTheRoutineCannotBeReached(FireTest):
+    def test_no_answer_in_time_is_not_sent(self):
+        result = self.fire({FIRE_PATH: StubServer.HANG}, substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"})
+        self.assert_not_sent(result, "Could not reach the routine trigger")
+        self.assertEqual(len(self.stub.requests), 1, "the request was retried")
+
+    def test_the_whole_request_is_cut_off_after_the_total_time(self):
+        result = self.fire({FIRE_PATH: StubServer.HANG}, substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
+        self.assert_not_sent(result, "Could not reach the routine trigger")
+
+    def test_a_connection_closed_without_an_answer_is_not_sent(self):
+        result = self.fire({FIRE_PATH: StubServer.DROP})
+        self.assert_not_sent(result, "Could not reach the routine trigger")
+        self.assertEqual(len(self.stub.requests), 1, "the request was retried")
+
+    def test_a_refused_connection_is_not_sent(self):
+        result = self.fire(base_url=closed_port_url())
+        self.assert_not_sent(result, "Could not reach the routine trigger")
+
+
+class GivenTheStepIsNotSetUp(FireTest):
+    def test_an_empty_token_is_reported_without_a_request(self):
+        result = self.fire(CLAUDE_ROUTINE_TOKEN="")
+        self.assert_not_sent(result, "CLAUDE_ROUTINE_TOKEN is empty")
+        self.assertEqual(self.stub.requests, [])
+
+    def test_an_invalid_trigger_id_is_reported_without_a_request(self):
+        for trigger_id in ("", "trig_", "trig", "TRIG_abc", "trig_abc/../x", "trig_abc?x=1", "trig_abc\n", "trig_ab-c",
+                           "trig_abc def", "xtrig_abc", "trig_abc#"):
+            with self.subTest(trigger_id=trigger_id):
+                result = self.fire(TRIGGER_ID=trigger_id)
+                self.assert_not_sent(result, "routine-trigger-id is not a trigger id")
+                self.assertEqual(self.stub.requests, [])
+
+    def test_a_decision_with_no_text_is_reported_without_a_request(self):
+        for value in ("", "not json", "[]", json.dumps({"decision": "fire"}), json.dumps({"text": 7})):
+            with self.subTest(value=value):
+                result = self.fire(DECISION=value)
+                self.assert_not_sent(result, "has no request text")
+                self.assertEqual(self.stub.requests, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,5 +1,5 @@
-# Checks every pull request to this repository: lints the workflows and the example callers, and runs the request
-# decision's saved cases.
+# Checks every pull request to this repository: lints the workflows and the example callers, runs the request
+# decision's saved cases, and runs the unit tests of the reusable workflow's Python steps.
 name: Checks
 
 on:
@@ -33,3 +33,14 @@ jobs:
           persist-credentials: false
       - name: Run the saved cases
         run: request-decision/test
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner's own python3 and yq; the tests need nothing installed and no network beyond 127.0.0.1.
+      - name: Run the unit tests
+        run: python3 -m unittest discover --start-directory tests --verbose

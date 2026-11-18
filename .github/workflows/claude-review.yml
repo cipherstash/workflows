@@ -3,7 +3,8 @@
 #
 # Called from a short caller workflow in each repository (see examples/claude-review.yml). A reusable workflow runs in
 # the calling repository, so everything it needs is in this file: the request decision's jq program is the decide job's
-# REQUEST_DECISION variable, and request-decision/test runs this same program against saved cases.
+# REQUEST_DECISION variable, and request-decision/test runs this same program against saved cases. The Python steps'
+# scripts are inline too, and the unit tests in tests/ read them out of this file and run them.
 #
 # Kinds of review request handled so far:
 #   Ready: a non-draft pull request opened or reopened, or a draft marked ready for review. Drafts, bots' pull requests,
@@ -224,56 +225,124 @@ jobs:
           ORG: ${{ github.repository_owner }}
           TEAM: ${{ inputs.team }}
           REQUESTER: ${{ steps.first.outputs.requester }}
+        # Python's standard library only (3.10 features), so nothing is installed; tests/test_lookup.py runs this script.
+        shell: python3 {0}
         run: |
           # Membership is never assumed: anything but a clear answer from GitHub is "lookup-failed", which skips.
+          import http.client
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+          import uuid
+
+          # Seconds to wait to connect, and then for each read of the answer.
+          TIMEOUT_SECONDS = 10
+
           # Names go into the URL, so each must start with a letter, digit or (for a team) underscore, which keeps "."
           # and ".." out. A login is letters and digits joined by single hyphens (or underscores, for managed users).
-          membership=lookup-failed
-          # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
-          output() {
-            local delimiter
-            delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
-            printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
-          }
-          api() {
-            # The token goes in on standard input, never on curl's command line.
-            curl --silent --show-error --connect-timeout 10 --max-time 30 \
-              --output "$RUNNER_TEMP/lookup.json" --write-out '%{http_code}' \
-              -H @- \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "$GITHUB_API_URL/$1" <<<"Authorization: Bearer $APP_TOKEN" || true
-          }
-          if [[ "$TOKEN_OUTCOME" != success || -z "$APP_TOKEN" ]]; then
-            echo "::error::Could not create the membership App's token: check the CLAUDE_REVIEW_APP_ID and CLAUDE_REVIEW_APP_PRIVATE_KEY secrets, and that the App is installed on $ORG with Members: read"
-          elif ! [[ "$ORG" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ && "$TEAM" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ && "$REQUESTER" =~ ^[A-Za-z0-9]+([-_][A-Za-z0-9]+)*$ ]]; then
-            echo "::error::Cannot look up team membership: the organisation, team or requester is not a valid GitHub name"
-          else
-            status="$(api "orgs/$ORG/teams/$TEAM/memberships/$REQUESTER")"
-            case "$status" in
-              200)
-                # A pending invitation is not membership.
-                if jq --exit-status '.state == "active"' "$RUNNER_TEMP/lookup.json" >/dev/null; then
-                  membership=member
-                else
-                  membership=not-member
-                fi
-                ;;
-              404)
-                # GitHub also answers 404 for a team that does not exist, which would otherwise skip everyone quietly.
-                team_status="$(api "orgs/$ORG/teams/$TEAM")"
-                if [[ "$team_status" == 200 ]]; then
-                  membership=not-member
-                else
-                  echo "::error::Cannot look up team membership: team $ORG/$TEAM was not found (HTTP $team_status); check the team input and the App's installation"
-                fi
-                ;;
-              *)
-                echo "::error::Cannot look up team membership in $ORG/$TEAM: GitHub answered HTTP $status"
-                ;;
-            esac
-          fi
-          output membership "$membership"
+          ORG_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
+          TEAM_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+          LOGIN = re.compile(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*")
+
+
+          class LookupFailed(Exception):
+              """Membership could not be checked; the message says why."""
+
+
+          def error(message):
+              # Escaped as GitHub's workflow commands require, so no value can end the annotation or start another.
+              escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error::{escaped}", flush=True)
+
+
+          def output(name, value):
+              # A random delimiter makes any value safe, even one with a newline in it.
+              delimiter = f"ghadelim_{uuid.uuid4()}"
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as file:
+                  file.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+
+
+          class NoRedirects(urllib.request.HTTPRedirectHandler):
+              # A redirect is an answer to report, not to follow: following it could send the token somewhere else.
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+
+          # Proxy settings in the environment are honoured, as curl honoured them before.
+          opener = urllib.request.build_opener(NoRedirects)
+
+
+          def api(path, token):
+              """GETs path from the GitHub API and returns (status, body). The token is only ever a request header."""
+              request = urllib.request.Request(
+                  f"{os.environ['GITHUB_API_URL']}/{path}",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                      return response.status, response.read()
+              except urllib.error.HTTPError as answer:
+                  return answer.code, b""
+              except (OSError, http.client.HTTPException, ValueError) as failure:
+                  # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
+                  # reported.
+                  reason = getattr(failure, "reason", failure)
+                  raise LookupFailed(f"Could not reach GitHub to look up team membership ({type(reason).__name__})")
+
+
+          def look_up(token, org, team, requester):
+              if os.environ.get("TOKEN_OUTCOME") != "success" or not token:
+                  raise LookupFailed(
+                      "Could not create the membership App's token: check the CLAUDE_REVIEW_APP_ID and "
+                      f"CLAUDE_REVIEW_APP_PRIVATE_KEY secrets, and that the App is installed on {org} with Members: read"
+                  )
+              if not (ORG_NAME.fullmatch(org) and TEAM_NAME.fullmatch(team) and LOGIN.fullmatch(requester)):
+                  raise LookupFailed(
+                      "Cannot look up team membership: the organisation, team or requester is not a valid GitHub name"
+                  )
+              status, body = api(f"orgs/{org}/teams/{team}/memberships/{requester}", token)
+              if status == 200:
+                  try:
+                      membership = json.loads(body)
+                  except ValueError:
+                      membership = None
+                  if not isinstance(membership, dict):
+                      raise LookupFailed(
+                          f"Cannot look up team membership in {org}/{team}: GitHub's answer was not a membership"
+                      )
+                  # A pending invitation is not membership.
+                  return "member" if membership.get("state") == "active" else "not-member"
+              if status == 404:
+                  # GitHub also answers 404 for a team that does not exist, which would otherwise skip everyone quietly.
+                  team_status, _ = api(f"orgs/{org}/teams/{team}", token)
+                  if team_status == 200:
+                      return "not-member"
+                  raise LookupFailed(
+                      f"Cannot look up team membership: team {org}/{team} was not found (HTTP {team_status}); "
+                      "check the team input and the App's installation"
+                  )
+              raise LookupFailed(f"Cannot look up team membership in {org}/{team}: GitHub answered HTTP {status}")
+
+
+          membership = "lookup-failed"
+          try:
+              membership = look_up(
+                  os.environ.get("APP_TOKEN", ""),
+                  os.environ.get("ORG", ""),
+                  os.environ.get("TEAM", ""),
+                  os.environ.get("REQUESTER", ""),
+              )
+          except LookupFailed as failure:
+              error(str(failure))
+          except Exception as failure:  # Anything unexpected still ends as a reported lookup-failed, never a member.
+              error(f"Cannot look up team membership: the lookup broke ({type(failure).__name__})")
+          output("membership", membership)
 
       - name: Decide (with the membership lookup's result)
         id: second
@@ -301,33 +370,73 @@ jobs:
         env:
           FIRST: ${{ steps.first.outputs.decision }}
           SECOND: ${{ steps.second.outputs.decision }}
+        # Python's standard library only (3.10 features), so nothing is installed; tests/test_report.py runs this script.
+        shell: python3 {0}
         run: |
-          # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
-          output() {
-            local delimiter
-            delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
-            printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
-          }
-          failed='{"decision":"skip","reason":"decision-failed"}'
-          output decision "$failed"
-          decision="${SECOND:-$FIRST}"
-          # Only a finished decision, a skip or a fire, is passed on.
-          if ! jq --exit-status '.decision == "skip" or .decision == "fire"' <<<"$decision" >/dev/null 2>&1; then
-            echo "::error::The request decision did not finish; no review was requested"
-            decision="$failed"
-          fi
-          if [[ "$(jq --raw-output '.reason // ""' <<<"$decision")" == membership-lookup-failed ]]; then
-            echo "::error::Team membership could not be checked, so no review was requested"
-          fi
-          output decision "$decision"
-          jq --raw-output '
-            if .decision == "fire"
-            then "Claude review: requested (\(.kind), by @\(.requester), pull request #\(.pull_request.number))"
-            else "Claude review: skipped (\(.reason))"
-            end' <<<"$decision" | tee -a "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          import uuid
+
+          FAILED = '{"decision":"skip","reason":"decision-failed"}'
+
+
+          def output(name, value):
+              # A random delimiter makes any value safe, even one with a newline in it.
+              delimiter = f"ghadelim_{uuid.uuid4()}"
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as file:
+                  file.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+
+
+          def finished(value):
+              """The decision value parsed, if it is a finished decision (a skip or a fire), or else None."""
+              try:
+                  decision = json.loads(value)
+              except ValueError:
+                  return None
+              if isinstance(decision, dict) and decision.get("decision") in ("skip", "fire"):
+                  return decision
+              return None
+
+
+          def text(value):
+              # As jq's string interpolation: a string as it is, anything else as JSON.
+              return value if isinstance(value, str) else json.dumps(value)
+
+
+          def summary(decision):
+              if decision.get("decision") == "fire":
+                  pull_request = decision.get("pull_request")
+                  number = pull_request.get("number") if isinstance(pull_request, dict) else None
+                  line = (
+                      f"Claude review: requested ({text(decision.get('kind'))}, by @{text(decision.get('requester'))}, "
+                      f"pull request #{text(number)})"
+                  )
+              else:
+                  line = f"Claude review: skipped ({text(decision.get('reason'))})"
+              # One line, whatever the decision holds, so it cannot start a workflow command.
+              return line.replace("\r", " ").replace("\n", " ")
+
+
+          try:
+              output("decision", FAILED)
+              value = os.environ.get("SECOND") or os.environ.get("FIRST") or ""
+              decision = finished(value)
+              if decision is None:
+                  print("::error::The request decision did not finish; no review was requested", flush=True)
+                  value, decision = FAILED, json.loads(FAILED)
+              if decision.get("reason") == "membership-lookup-failed":
+                  print("::error::Team membership could not be checked, so no review was requested", flush=True)
+              # Passed on as the decision step wrote it.
+              output("decision", value)
+              line = summary(decision)
+              print(line, flush=True)
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as file:
+                  file.write(line + "\n")
+          except Exception as failure:  # The decision-failed skip, written first, stands.
+              print(f"::error::Could not report the request decision ({type(failure).__name__})", flush=True)
 
   # Fires the routine trigger. It holds no permissions and sees only the decision: the event's free text reaches it only
-  # as the decision's text, which jq places in the request body.
+  # as the decision's text, which the send step's json module places in the request body.
   fire:
     needs: decide
     if: fromJSON(needs.decide.outputs.decision).decision == 'fire'
@@ -355,28 +464,152 @@ jobs:
           CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
           TRIGGER_ID: ${{ inputs.routine-trigger-id }}
           DECISION: ${{ needs.decide.outputs.decision }}
+        # Python's standard library only (3.10 features), so nothing is installed; tests/test_fire.py runs this script.
+        shell: python3 {0}
         run: |
-          if [ -z "$CLAUDE_ROUTINE_TOKEN" ]; then
-            echo "::error::CLAUDE_ROUTINE_TOKEN is empty: pass it to the reusable workflow as a secret"
-            exit 1
-          fi
+          # Only a 2xx answer counts as sent. Anything else is an error annotation and a failed step, which the job's
+          # continue-on-error keeps from turning the check red.
+          import http.client
+          import json
+          import os
+          import re
+          import signal
+          import sys
+          import urllib.error
+          import urllib.request
+          import uuid
+
+          # The routine API's address. It is fixed here: no input or event field can change where the token goes.
+          API_BASE_URL = "https://api.anthropic.com"
+          # Seconds to wait to connect, and then for each read of the answer.
+          TIMEOUT_SECONDS = 10
+          # Seconds the whole request may take, however slowly the answer arrives.
+          TOTAL_SECONDS = 30
+          # The most of an error answer's body shown in the annotation.
+          EXCERPT_CHARACTERS = 200
+
           # The id goes into the URL, so anything but a trigger id is refused.
-          if ! [[ "$TRIGGER_ID" =~ ^trig_[A-Za-z0-9]+$ ]]; then
-            echo "::error::routine-trigger-id is not a trigger id (trig_…): pass vars.CLAUDE_ROUTINE_TRIGGER_ID, set under Settings > Secrets and variables > Actions > Variables"
-            exit 1
-          fi
-          # jq writes the body, so nothing in the pull request's fields can break the JSON.
-          body="$(jq --compact-output '{text: .text}' <<<"$DECISION")"
-          # No retry: a request that timed out may still have started a session, and a second would review twice. A
-          # failed request is re-run by hand. The token goes in on standard input, never on curl's command line.
-          curl --fail-with-body --silent --show-error --connect-timeout 10 --max-time 30 -X POST \
-            "https://api.anthropic.com/v1/claude_code/routines/$TRIGGER_ID/fire" \
-            -H @- \
-            -H "anthropic-version: 2023-06-01" \
-            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
-            -H "Content-Type: application/json" \
-            -d "$body" <<<"Authorization: Bearer $CLAUDE_ROUTINE_TOKEN"
-          echo "sent=true" >>"$GITHUB_OUTPUT"
+          TRIGGER_ID = re.compile(r"trig_[A-Za-z0-9]+")
+
+
+          class NotSent(Exception):
+              """The request was not sent, or the routine trigger did not accept it; the message says why."""
+
+
+          class TotalTimeout(Exception):
+              """The whole request took longer than TOTAL_SECONDS."""
+
+
+          def error(message):
+              # Escaped as GitHub's workflow commands require, so no value can end the annotation or start another.
+              escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error::{escaped}", flush=True)
+
+
+          def output(name, value):
+              # A random delimiter makes any value safe, even one with a newline in it.
+              delimiter = f"ghadelim_{uuid.uuid4()}"
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as file:
+                  file.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+
+
+          def excerpt(body, token):
+              """The start of an answer's body, on one line, with the token taken out in case the answer repeats it."""
+              text = body.decode("utf-8", errors="replace").replace(token, "[token]")
+              text = " ".join("".join(c if c.isprintable() else " " for c in text).split())
+              if len(text) > EXCERPT_CHARACTERS:
+                  text = text[:EXCERPT_CHARACTERS] + "…"
+              return text
+
+
+          class NoRedirects(urllib.request.HTTPRedirectHandler):
+              # A redirect is an answer to report, not to follow: following it could send the token somewhere else.
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+
+          # Proxy settings in the environment are honoured, as curl honoured them before.
+          opener = urllib.request.build_opener(NoRedirects)
+
+
+          def on_total_timeout(signum, frame):
+              raise TotalTimeout()
+
+
+          def post(url, token, body):
+              """POSTs body to url once and returns (status, the start of the answer's body). There is no retry: a request
+              that timed out may still have started a session, and a second would review twice. A failed request is re-run
+              by hand. The token is only ever a request header."""
+              request = urllib.request.Request(
+                  url,
+                  data=body,
+                  method="POST",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "anthropic-version": "2023-06-01",
+                      "anthropic-beta": "experimental-cc-routine-2026-04-01",
+                      "Content-Type": "application/json",
+                  },
+              )
+              signal.signal(signal.SIGALRM, on_total_timeout)
+              signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
+              try:
+                  try:
+                      with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                          return response.status, response.read(4096)
+                  except urllib.error.HTTPError as answer:
+                      try:
+                          answer_body = answer.read(4096)
+                      except (OSError, http.client.HTTPException):
+                          answer_body = b""
+                      return answer.code, answer_body
+              except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
+                  # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
+                  # reported.
+                  reason = getattr(failure, "reason", failure)
+                  raise NotSent(f"Could not reach the routine trigger ({type(reason).__name__}); no review was requested")
+              finally:
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+
+
+          def fire(token, trigger_id, decision):
+              if not token:
+                  raise NotSent("CLAUDE_ROUTINE_TOKEN is empty: pass it to the reusable workflow as a secret")
+              if not TRIGGER_ID.fullmatch(trigger_id):
+                  raise NotSent(
+                      "routine-trigger-id is not a trigger id (trig_…): pass vars.CLAUDE_ROUTINE_TRIGGER_ID, set under "
+                      "Settings > Secrets and variables > Actions > Variables"
+                  )
+              try:
+                  text = json.loads(decision).get("text")
+              except (ValueError, AttributeError):
+                  text = None
+              if not isinstance(text, str):
+                  raise NotSent("The request decision has no request text; no review was requested")
+              # json writes the body, so nothing in the pull request's fields can break it.
+              body = json.dumps({"text": text}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+              status, answer = post(f"{API_BASE_URL}/v1/claude_code/routines/{trigger_id}/fire", token, body)
+              if not 200 <= status < 300:
+                  message = f"The routine trigger answered HTTP {status}; no review was requested"
+                  shown = excerpt(answer, token)
+                  raise NotSent(f"{message}: {shown}" if shown else message)
+              print(f"Sent the review request to the routine trigger (HTTP {status})", flush=True)
+
+
+          try:
+              fire(
+                  os.environ.get("CLAUDE_ROUTINE_TOKEN", ""),
+                  os.environ.get("TRIGGER_ID", ""),
+                  os.environ.get("DECISION", ""),
+              )
+              # Only a request the routine trigger accepted counts as sent.
+              output("sent", "true")
+          except NotSent as failure:
+              error(str(failure))
+              sys.exit(1)
+          except Exception as failure:  # Anything unexpected is reported by its kind only, and is not sent.
+              error(f"Could not send the review request: the step broke ({type(failure).__name__})")
+              sys.exit(1)
 
   # Adds a 👀 reaction to a comment command once its request has been sent, so the requester knows it was received.
   # This is the only job that holds a write permission, and it sees only the decision. Reacting to a pull request's
