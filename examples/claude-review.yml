@@ -19,7 +19,10 @@ name: Claude review
 on:
   pull_request:
     types: [opened, reopened, ready_for_review]
-  issue_comment:
+  # zizmor flags issue_comment because anyone who can comment can start this workflow. Accepted: the shared
+  # workflow acts only on a comment command from a team member, checked by its decide job, and never runs code from
+  # the pull request.
+  issue_comment: # zizmor: ignore[dangerous-triggers] only a team member's comment command is acted on
     types: [created]
 
 permissions: {}
