@@ -95,7 +95,7 @@ class GivenTheRoutineAcceptsTheRequest(FireTest):
         self.assertEqual(json.loads(self.stub.bodies[0]), {"text": TEXT})
 
     def test_text_with_quotes_newlines_and_unicode_reaches_the_routine_unchanged(self):
-        text = 'Review "this" \\ one\nline two\r\n\ttabbed 👀 é ü   {"text": "x"} $(echo hi) `id`'
+        text = 'Review "this" \\ one\nline two\r\n\ttabbed 👀 é ü \u2028 {"text": "x"} $(echo hi) `id`'
         self.fire({FIRE_PATH: (200, "{}")}, DECISION=decision(text))
         self.assertEqual(json.loads(self.stub.bodies[0].decode("utf-8")), {"text": text})
 
@@ -149,7 +149,9 @@ class GivenTheRoutineRejectsTheRequest(FireTest):
 
 class GivenTheRoutineCannotBeReached(FireTest):
     def test_no_answer_in_time_is_not_sent(self):
-        result = self.fire({FIRE_PATH: StubServer.HANG}, substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"})
+        result = self.fire(
+            {FIRE_PATH: StubServer.HANG}, substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"}
+        )
         self.assert_not_sent(result, "Could not reach the routine trigger")
         self.assertEqual(len(self.stub.requests), 1, "the request was retried")
 

@@ -11,7 +11,7 @@ HELPERS = STEPS_DIR / "helpers.py"
 
 # The Python steps still inline in the workflow, as (job, step id). None are left: every Python step runs from a file
 # in steps/. A new inline step must be added here, and so is checked against the helper module below.
-INLINE_STEPS = set()
+INLINE_STEPS: set[tuple[str, str]] = set()
 
 
 class PythonStepsTest(unittest.TestCase):
@@ -62,7 +62,7 @@ REQUEST_SCAFFOLDING = (
     "total_time_limit",
 )
 # Scaffolding any inline step may define; every copy of it must be identical to the module's.
-SHARED_SCAFFOLDING = REQUEST_SCAFFOLDING + ("output",)
+SHARED_SCAFFOLDING = (*REQUEST_SCAFFOLDING, "output")
 
 
 def top_level_definitions(script):
@@ -114,7 +114,9 @@ class SharedScaffoldingTest(unittest.TestCase):
                 definition = top_level_definitions(script).get(name)
                 if definition is not None:
                     with self.subTest(name=name, step=step):
-                        self.assertEqual(definition, self.helpers[name], f"{name} in {step} differs from {HELPERS.name}")
+                        self.assertEqual(
+                            definition, self.helpers[name], f"{name} in {step} differs from {HELPERS.name}"
+                        )
 
 
 if __name__ == "__main__":
