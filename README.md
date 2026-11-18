@@ -62,6 +62,7 @@ A run has two jobs:
 
 `fire` holds no permissions.
 Only one `fire` runs per pull request at a time: a second waits rather than cancelling the first.
+The group uses `cancel-in-progress: false`, which keeps only one waiting run. If a third request for the same pull request arrives while one is running and one is waiting, it replaces the waiting one, and the replaced run's `fire` job shows as cancelled. The running one is never cancelled, and the newest request is the one that waits.
 
 ## The request decision
 
