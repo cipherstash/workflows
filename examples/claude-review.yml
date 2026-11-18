@@ -28,7 +28,15 @@ jobs:
   review:
     # Saves starting runners for comments that cannot be a comment command: only comments on pull requests that mention
     # the review agent (contains ignores case) go on. The shared workflow still checks every rule itself.
-    if: github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, '@cipherstash-agent'))
+    # The mention must match the shared workflow's `review-agent` input: change it here too if you change that input.
+    # The author_association test is a performance filter only, so a comment from anyone else does not start a runner.
+    # It is not the gate: the shared workflow's team membership check decides who may request a review.
+    if: >-
+      github.event_name != 'issue_comment' || (
+      github.event.issue.pull_request
+      && contains(github.event.comment.body, '@cipherstash-agent')
+      && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+      )
     # The shared workflow's jobs can hold no more than this. Only its reaction job uses it, to add 👀 to a comment
     # command; its other jobs hold no permissions.
     permissions:
