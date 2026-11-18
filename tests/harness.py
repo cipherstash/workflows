@@ -179,8 +179,9 @@ class StubServer:
     """A stand-in for the GitHub API on 127.0.0.1.
 
     routes maps a path to (status, body), to HANG for an answer that never comes, or to DROP for a connection closed
-    without an answer. A path with no route answers
-    404. Every request is recorded as (method, path, headers). Use as a context manager.
+    without an answer, for GET and POST alike. A path with no route answers 404. Every request is recorded in requests
+    as (method, path, headers), and its body, as bytes (empty for a GET), at the same place in bodies. Headers are
+    looked up by name ignoring case, as HTTP does. Use as a context manager.
     """
 
     HANG = object()
@@ -189,13 +190,23 @@ class StubServer:
     def __init__(self, routes=None):
         self.routes = dict(routes or {})
         self.requests = []
+        self.bodies = []
         self._release = threading.Event()
         stub = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                self.answer("GET")
+
+            def do_POST(self):
+                self.answer("POST")
+
+            def answer(self, method):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length) if length else b""
                 # Headers stay a message, so a lookup by name ignores case as HTTP does.
-                stub.requests.append(("GET", self.path, self.headers))
+                stub.requests.append((method, self.path, self.headers))
+                stub.bodies.append(body)
                 route = stub.routes.get(self.path, (404, '{"message": "Not Found"}'))
                 if route is StubServer.HANG:
                     stub._release.wait(10)
