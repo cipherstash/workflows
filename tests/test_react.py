@@ -77,6 +77,7 @@ class GivenGitHubAddsTheReaction(ReactTest):
         self.assertEqual(headers.get("Authorization"), f"Bearer {TOKEN}")
         self.assertEqual(headers.get("Accept"), "application/vnd.github+json")
         self.assertEqual(headers.get("X-GitHub-Api-Version"), "2022-11-28")
+        self.assertEqual(headers.get("Content-Type"), "application/json")
         self.assertEqual(self.stub.bodies[0], b'{"content":"eyes"}')
 
 
@@ -95,6 +96,17 @@ class GivenGitHubRefusesTheReaction(ReactTest):
 
 
 class GivenGitHubCannotBeReached(ReactTest):
+    def test_no_answer_in_time_is_a_warning(self):
+        result = self.react({REACTIONS_PATH: StubServer.HANG},
+                            substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"})
+        self.assert_warned(result, "the review was still requested")
+        self.assertEqual(len(self.stub.requests), 1, "the request was retried")
+
+    def test_the_whole_request_is_cut_off_after_the_total_time(self):
+        result = self.react({REACTIONS_PATH: StubServer.HANG},
+                            substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
+        self.assert_warned(result, "the review was still requested")
+
     def test_a_connection_closed_without_an_answer_is_a_warning(self):
         result = self.react({REACTIONS_PATH: StubServer.DROP})
         self.assert_warned(result, "the review was still requested")
@@ -108,9 +120,16 @@ class GivenGitHubCannotBeReached(ReactTest):
 class GivenTheStepCannotReact(ReactTest):
     def test_an_invalid_comment_id_is_a_warning_without_a_request(self):
         for comment_id in (None, "", "12a", "1/../2", "12/reactions", "12?x=1", -1, 1.5, 1e30, True, [12], {"id": 12},
-                           "１２", " 12"):
+                           "１２", "12\n", " 12"):
             with self.subTest(comment_id=comment_id):
                 result = self.react(DECISION=decision(comment_id=comment_id))
+                self.assert_warned(result, "its id is not a number")
+                self.assertEqual(self.stub.requests, [])
+
+    def test_a_decision_with_no_comment_id_is_a_warning_without_a_request(self):
+        for value in ("", "not json", "[]", json.dumps({"decision": "fire"})):
+            with self.subTest(value=value):
+                result = self.react(DECISION=value)
                 self.assert_warned(result, "its id is not a number")
                 self.assertEqual(self.stub.requests, [])
 
@@ -126,6 +145,11 @@ class GivenTheStepCannotReact(ReactTest):
         result = self.react({path: (201, "{}")}, DECISION=decision(comment_id=comment_id))
         self.assert_reacted(result)
         self.assertEqual(self.stub.paths(), [path])
+
+    def test_an_empty_token_is_a_warning_without_a_request(self):
+        result = self.react(GITHUB_TOKEN="")
+        self.assert_warned(result, "GITHUB_TOKEN is empty")
+        self.assertEqual(self.stub.requests, [])
 
 
 if __name__ == "__main__":

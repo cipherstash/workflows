@@ -630,24 +630,130 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           DECISION: ${{ needs.decide.outputs.decision }}
+        # Python's standard library only (3.10 features), so nothing is installed; tests/test_react.py runs this script.
+        shell: python3 {0}
         run: |
-          # jq reads the id, so a large number keeps every digit.
-          COMMENT_ID="$(jq --raw-output '.comment_id // ""' <<<"$DECISION")"
-          # The id goes into the URL, so anything but a number is refused.
-          if ! [[ "$COMMENT_ID" =~ ^[0-9]+$ ]]; then
-            echo "::warning::Could not react to the comment: its id is not a number"
-            exit 1
-          fi
-          # The token goes in on standard input, never on curl's command line.
-          status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 -X POST \
-            --output "$RUNNER_TEMP/reaction.json" --write-out '%{http_code}' \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" \
-            -H @- \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            -d '{"content":"eyes"}' <<<"Authorization: Bearer $GITHUB_TOKEN" || true)"
-          # 201 adds the reaction; 200 means it was already there.
-          if [[ "$status" != 200 && "$status" != 201 ]]; then
-            echo "::warning::Could not add the 👀 reaction to comment $COMMENT_ID (HTTP $status); the review was still requested. Check that the calling job grants issues: write"
-            exit 1
-          fi
+          # Only HTTP 201 (added) or 200 (already there) counts as reacted. Anything else is a warning annotation and a
+          # failed step, which the step's continue-on-error keeps from turning the check red.
+          import http.client
+          import json
+          import os
+          import re
+          import signal
+          import sys
+          import urllib.error
+          import urllib.request
+
+          # Seconds to wait to connect, and then for each read of the answer.
+          TIMEOUT_SECONDS = 10
+          # Seconds the whole request may take, however slowly the answer arrives.
+          TOTAL_SECONDS = 30
+
+          # The id goes into the URL, so anything but ASCII digits is refused.
+          COMMENT_ID = re.compile(r"[0-9]+")
+
+
+          class NotReacted(Exception):
+              """The reaction was not added; the message says why."""
+
+
+          class TotalTimeout(Exception):
+              """The whole request took longer than TOTAL_SECONDS."""
+
+
+          def warning(message):
+              # Escaped as GitHub's workflow commands require, so no value can end the annotation or start another.
+              escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::warning::{escaped}", flush=True)
+
+
+          class NoRedirects(urllib.request.HTTPRedirectHandler):
+              # A redirect is an answer to report, not to follow: following it could send the token somewhere else.
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+
+          # Proxy settings in the environment are honoured, as curl honoured them before.
+          opener = urllib.request.build_opener(NoRedirects)
+
+
+          def on_total_timeout(signum, frame):
+              raise TotalTimeout()
+
+
+          def comment_id(decision):
+              """The decision's comment id as a string of digits, or None. A JSON number of any size keeps every digit."""
+              try:
+                  value = json.loads(decision).get("comment_id")
+              except (ValueError, AttributeError):
+                  return None
+              if isinstance(value, bool) or not isinstance(value, (int, str)):
+                  return None
+              value = str(value)
+              return value if COMMENT_ID.fullmatch(value) else None
+
+
+          def post(url, token):
+              """POSTs the 👀 reaction to url once and returns the answer's status. There is no retry. The token is only
+              ever a request header."""
+              request = urllib.request.Request(
+                  url,
+                  data=json.dumps({"content": "eyes"}, separators=(",", ":")).encode("utf-8"),
+                  method="POST",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "Content-Type": "application/json",
+                  },
+              )
+              signal.signal(signal.SIGALRM, on_total_timeout)
+              signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
+              try:
+                  try:
+                      with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                          return response.status
+                  except urllib.error.HTTPError as answer:
+                      return answer.code
+              except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
+                  # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
+                  # reported.
+                  reason = getattr(failure, "reason", failure)
+                  raise NotReacted(
+                      f"Could not reach GitHub to add the 👀 reaction ({type(reason).__name__}); the review was still "
+                      "requested"
+                  )
+              finally:
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+
+
+          def react(token, decision):
+              comment = comment_id(decision)
+              if comment is None:
+                  raise NotReacted("Could not react to the comment: its id is not a number")
+              if not token:
+                  raise NotReacted(
+                      "Could not react to the comment: GITHUB_TOKEN is empty; the review was still requested"
+                  )
+              api_url, repository = os.environ["GITHUB_API_URL"], os.environ["GITHUB_REPOSITORY"]
+              status = post(f"{api_url}/repos/{repository}/issues/comments/{comment}/reactions", token)
+              # 201 adds the reaction; 200 means it was already there.
+              if status not in (200, 201):
+                  raise NotReacted(
+                      f"Could not add the 👀 reaction to comment {comment} (HTTP {status}); the review was still "
+                      "requested. Check that the calling job grants issues: write"
+                  )
+              print(f"Added the 👀 reaction to comment {comment} (HTTP {status})", flush=True)
+
+
+          try:
+              react(os.environ.get("GITHUB_TOKEN", ""), os.environ.get("DECISION", ""))
+          except NotReacted as failure:
+              warning(str(failure))
+              sys.exit(1)
+          except Exception as failure:  # Anything unexpected is reported by its kind only.
+              warning(
+                  f"Could not add the 👀 reaction: the step broke ({type(failure).__name__}); the review was still "
+                  "requested"
+              )
+              sys.exit(1)

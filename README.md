@@ -94,7 +94,7 @@ A run has up to three jobs:
 
 - `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
 - `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
-- `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, and only once `fire` has sent the request. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
+- `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, and only once `fire` has sent the request. It sends the reaction once, with no retry, and does not follow a redirect. HTTP `201` (added) or `200` (already there) counts as reacted. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
 
 `decide` and `fire` hold no permissions.
 `react` holds only `issues: write`, which GitHub documents as the permission for adding a reaction to an issue or pull request comment.
@@ -159,7 +159,7 @@ An event that has no pull request or comment author, such as a payload whose `us
 
 ## Python steps
 
-Some steps, such as the membership lookup and the request to the routine trigger, are written in Python.
+Some steps, such as the membership lookup, the request to the routine trigger and the 👀 reaction, are written in Python.
 They use only Python's standard library and keep to Python 3.10, so nothing is installed when they run.
 Like the request decision, each one is kept inline in the reusable workflow, with `shell: python3 {0}` and an `id`, because a reusable workflow cannot read files from this repository.
 The unit tests in `tests/` read each step's script out of the workflow, so they test exactly what ships.
