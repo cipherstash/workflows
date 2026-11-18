@@ -40,7 +40,7 @@ The instructions are trimmed and capped at 2,000 characters; longer instructions
 They go after the request's fixed text, in a block marked as data from the requester, so they cannot replace the routine's own instructions.
 
 Once the request is sent, the comment gets a 👀 reaction, so the requester knows it was received.
-No reaction means no request was sent: the comment was not a command, its author is not a team member, or the request failed.
+No reaction means no request was sent: the comment was not a command, its author is not a team member, the pull request is closed, the request failed, or a newer request for the same pull request replaced this one while it was still waiting to send (see `concurrency` below).
 
 A failed request never turns a pull request's checks red.
 It shows as an error in the workflow run instead.
@@ -55,6 +55,12 @@ Its workflow-level permissions are empty, and its calling job grants only `issue
 Only the reusable workflow's `react` job uses that permission; its other jobs hold none.
 The calling job also has an `if:` that starts the reusable workflow only for comments on pull requests that mention `@cipherstash-agent`, to save starting runners for every other comment.
 The reusable workflow still checks every rule itself.
+
+For comments, the `if:` also lets through only commenters whose `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`.
+This is a performance filter only, so a comment from anyone else does not start a runner.
+It is not the gate: the reusable workflow's team membership check decides who may request a review.
+Ready events are not filtered.
+If you change the `review-agent` input, change the `@cipherstash-agent` in the `if:` to match.
 
 GitHub runs `issue_comment` workflows from the repository's default branch, not from the pull request's branch.
 So the comment command works only once the caller is merged into the default branch.
@@ -92,7 +98,7 @@ A run has up to three jobs:
 
 `decide` and `fire` hold no permissions.
 `react` holds only `issues: write`, which GitHub documents as the permission for adding a reaction to an issue or pull request comment.
-Only one `fire` runs per pull request at a time, whichever kind of review request started it: a second waits rather than cancelling the first.
+Only one `fire` runs per pull request at a time, whichever kind of review request started it: a second waits rather than cancelling the first. If a third arrives while the second is still waiting, GitHub's concurrency rules replace the second with it, and the replaced run sends nothing.
 
 ## The request decision
 
@@ -140,6 +146,7 @@ Exactly one of:
 | --- | --- |
 | `not-a-review-request` | The event is not a kind of review request, such as a push to a pull request (`synchronize`), a comment on an issue rather than a pull request, or an edited or deleted comment. |
 | `not-a-command` | A new pull request comment whose first line is not a comment command. |
+| `closed` | A comment command on a closed pull request, which includes a merged one. Checked after the command match and before the author checks, so no membership lookup is made. |
 | `draft` | The pull request is a draft (Ready only). |
 | `bot` | The pull request's author (Ready) or the comment's author (comment command) is a bot. No membership lookup is made. |
 | `review-agent` | The comment command's author is the review agent. No membership lookup is made. |
