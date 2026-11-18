@@ -114,8 +114,8 @@ All three secrets, `CLAUDE_ROUTINE_TOKEN`, `CLAUDE_REVIEW_APP_ID` and `CLAUDE_RE
 A run has up to three jobs:
 
 - `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
-- `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. A failed request shows as a failed step, but the job and the check stay green.
-- `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, never for Ready or a requested reviewer, and only once `fire` has sent the request. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
+- `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
+- `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, never for Ready or a requested reviewer, and only once `fire` has sent the request. It sends the reaction once, with no retry, and does not follow a redirect. HTTP `201` (added) or `200` (already there) counts as reacted. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
 
 `decide` and `fire` hold no permissions.
 `react` holds only `issues: write`, which GitHub documents as the permission for adding a reaction to an issue or pull request comment.
@@ -178,12 +178,20 @@ Exactly one of:
 
 An event that has no pull request author, comment author or sender to act as the requester, such as a payload whose `user` is `null`, is skipped as `not-a-review-request`.
 
+## Python steps
+
+Some steps, such as the membership lookup, the request to the routine trigger and the 👀 reaction, are written in Python.
+They use only Python's standard library and keep to Python 3.10, so nothing is installed when they run.
+Like the request decision, each one is kept inline in the reusable workflow, with `shell: python3 {0}` and an `id`, because a reusable workflow cannot read files from this repository.
+The unit tests in `tests/` read each step's script out of the workflow, so they test exactly what ships.
+
 ## Checks
 
-Every pull request runs two checks:
+Every pull request runs three checks:
 
 - `actionlint` over the workflows in this repository and the example callers in `examples/`.
 - The request decision's saved cases, run by `request-decision/test`.
+- The unit tests of the Python steps, in `tests/`.
 
 The request decision's rules are tested against saved event payloads, so the tests need no network and run anywhere with `bash`, `jq` and `yq`:
 
@@ -197,3 +205,22 @@ request-decision/test
 2. Add `input.json`: the decision's input, with `event_name`, `event` (the event payload, trimmed to the fields that matter), `review_agent` (usually `"cipherstash-agent"`) and `membership` (`null` to test the decision before a lookup).
 3. Add `expected.json`: the decision expected for that input, such as `{"decision": "skip", "reason": "draft"}`.
 4. Run `request-decision/test` and check the new case passes. A case that fails prints the difference between the expected and actual decision.
+
+### Running the unit tests
+
+The unit tests need `python3` (3.10 or later), `bash` and `yq`, and no network: a test that needs GitHub's API or the routine trigger starts a stand-in server on 127.0.0.1.
+
+```sh
+python3 -m unittest discover --start-directory tests
+```
+
+### Adding a unit test
+
+`tests/harness.py` runs one step of the reusable workflow on its own:
+
+- `run_step(job, step_id, env, api_url=..., repository=...)` reads the step's script out of the workflow with `yq`, runs it with the step's shell, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`), its `::error::` annotations (`.errors()`) and its `::warning::` annotations (`.warnings()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`, `GITHUB_API_URL` (`api_url`) and `GITHUB_REPOSITORY` (`repository`).
+- `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body, to `StubServer.HANG` for an answer that never comes, or to `StubServer.DROP` for a connection closed without one, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
+- `substitutions` replaces text in the script before it runs, such as a timeout constant lowered so a test does not wait, or the routine API's fixed address swapped for the stand-in server's. Each piece of text must appear exactly once in the script.
+
+1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
+2. Run the unit tests and check the new test passes.
