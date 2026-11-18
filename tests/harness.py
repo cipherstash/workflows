@@ -28,9 +28,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "claude-review.yml"
 # Where the step files live in this repository.
 STEPS_DIR = ROOT / "steps"
-# Where the workflow checks out this repository, in the job's workspace.
+# Where the workflow checks out this repository, in the job's workspace. Each job that checks it out names that
+# directory in its env as WORKFLOW_FILES, and a step names a file in it from there.
 CHECKOUT_PATH = ".cipherstash-workflows"
-WORKSPACE_PREFIX = "${{ github.workspace }}/"
+WORKFLOW_FILES = f"${{{{ github.workspace }}}}/{CHECKOUT_PATH}"
+WORKFLOW_FILES_PREFIX = "${{ env.WORKFLOW_FILES }}/"
 
 # The shell a Python step names, so the runner runs its script with python3.
 PYTHON_SHELL = "python3 {0}"
@@ -135,14 +137,22 @@ def python_steps_without_id():
     return names
 
 
+def checked_out_file(job, step_id, name):
+    """The file, in this repository, that the step's env value name gives as a path in the job's WORKFLOW_FILES."""
+    value = _yq(_step_query(job, step_id) + f' | .env.{name} // ""').strip()
+    job_files = _yq(f'.jobs.{job}.env.WORKFLOW_FILES // ""').strip()
+    if job_files != WORKFLOW_FILES or not value.startswith(WORKFLOW_FILES_PREFIX):
+        raise LookupError(
+            f"step {step_id!r} in job {job!r} has no {name} in {CHECKOUT_PATH}: {value!r}, "
+            f"with WORKFLOW_FILES {job_files!r}"
+        )
+    return ROOT / value[len(WORKFLOW_FILES_PREFIX):]
+
+
 @functools.cache
 def step_file_path(job, step_id):
     """The step file, in this repository, that the step's STEP_FILE names in the workflow's checkout."""
-    value = _yq(_step_query(job, step_id) + ' | .env.STEP_FILE // ""').strip()
-    prefix = f"{WORKSPACE_PREFIX}{CHECKOUT_PATH}/"
-    if not value.startswith(prefix):
-        raise LookupError(f"step {step_id!r} in job {job!r} has no STEP_FILE in {CHECKOUT_PATH}: {value!r}")
-    return ROOT / value[len(prefix):]
+    return checked_out_file(job, step_id, "STEP_FILE")
 
 
 @functools.cache

@@ -121,7 +121,7 @@ The code for these steps is in the `steps/` directory:
 
 The `decide` job checks out `steps/` with the request decision, as described above.
 The `fire` job checks out `steps/` in the same way, because a job cannot see another job's files.
-Each step names its file in its `env` as `STEP_FILE`, and runs it with the runner's `python3`.
+Each job names its checkout in its `env` as `WORKFLOW_FILES`, and each step names its file there as `STEP_FILE` and runs it with the runner's `python3`.
 If the report's file was not checked out, the step still writes the `decision-failed` skip, an error and the summary line by itself.
 If the routine call's file was not checked out, the step sends nothing and shows an error.
 

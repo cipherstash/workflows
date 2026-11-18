@@ -7,7 +7,7 @@ every run would end as decision-failed or with no review requested.
 
 import unittest
 
-from harness import CHECKOUT_PATH, ROOT, STEPS_DIR, WORKSPACE_PREFIX, _yq, file_steps, step_file_path
+from harness import CHECKOUT_PATH, ROOT, STEPS_DIR, WORKFLOW_FILES, _yq, checked_out_file, file_steps, step_file_path
 
 
 def checkout(job="decide"):
@@ -27,19 +27,26 @@ def checked_out(path, patterns):
 
 
 class DecisionFileTest(unittest.TestCase):
-    def test_the_env_path_is_in_the_checkout_and_matched_by_a_sparse_pattern(self):
-        env_path = _yq(".jobs.decide.env.REQUEST_DECISION_FILE").strip()
-        checkout_path, patterns = checkout()
-        self.assertTrue(env_path.startswith(f"{WORKSPACE_PREFIX}{checkout_path}/"), env_path)
-        relative = env_path[len(f"{WORKSPACE_PREFIX}{checkout_path}/"):]
-        self.assertTrue((ROOT / relative).is_file(), relative)
-        self.assertTrue(checked_out(relative, patterns), (relative, patterns))
+    def test_each_env_path_is_in_the_checkout_and_matched_by_a_sparse_pattern(self):
+        _, patterns = checkout()
+        for step_id in ("first", "second"):
+            with self.subTest(step=step_id):
+                path = checked_out_file("decide", step_id, "REQUEST_DECISION_FILE")
+                self.assertTrue(path.is_file(), path)
+                relative = path.relative_to(ROOT).as_posix()
+                self.assertTrue(checked_out(relative, patterns), (relative, patterns))
 
 
 class CheckoutTest(unittest.TestCase):
     def test_the_harness_and_the_workflow_agree_on_the_checkout_path(self):
         checkout_path, _ = checkout()
         self.assertEqual(checkout_path, CHECKOUT_PATH)
+
+    def test_each_job_that_checks_out_this_repository_names_the_checkout_in_its_env(self):
+        # The step files and the request decision are named from WORKFLOW_FILES, so it must be the checkout's path.
+        for job in sorted({job for job, _ in file_steps()}):
+            with self.subTest(job=job):
+                self.assertEqual(_yq(f".jobs.{job}.env.WORKFLOW_FILES").strip(), WORKFLOW_FILES)
 
     def test_each_sparse_pattern_names_a_file_or_directory_in_this_repository(self):
         _, patterns = checkout()
