@@ -115,7 +115,8 @@ jobs:
             '{event_name: $event_name, event: $event[0], review_agent: $review_agent, membership: null}' >"$request"
           # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
           output() {
-            local delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
+            local delimiter
+            delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
             printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
           }
           decision="$(jq --compact-output "$REQUEST_DECISION" "$request")"
@@ -159,7 +160,8 @@ jobs:
           membership=lookup-failed
           # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
           output() {
-            local delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
+            local delimiter
+            delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
             printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
           }
           api() {
@@ -211,7 +213,8 @@ jobs:
         run: |
           # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
           output() {
-            local delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
+            local delimiter
+            delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
             printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
           }
           decision="$(jq --compact-output --arg membership "$MEMBERSHIP" '.membership = $membership' "$RUNNER_TEMP/request.json" \
@@ -230,7 +233,8 @@ jobs:
         run: |
           # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
           output() {
-            local delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
+            local delimiter
+            delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
             printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
           }
           failed='{"decision":"skip","reason":"decision-failed"}'
