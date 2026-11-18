@@ -74,13 +74,18 @@ jobs:
         # requests, and they need review too.
         def ready:
           .event.pull_request as $pr
-          | {
-              decision: "fire",
-              kind: "ready",
-              requester: $pr.user.login,
-              pull_request: {number: $pr.number, url: $pr.html_url},
-              text: "Review pull request #\($pr.number) in \(.event.repository.full_name): \($pr.html_url)"
-            } as $fire
+          | .event.repository.full_name as $event_repo
+          | (
+              {
+                decision: "fire",
+                kind: "ready",
+                requester: $pr.user.login,
+                pull_request: {number: $pr.number, url: $pr.html_url}
+              }
+              # The text names the kind, from the decision's own kind field: the first line says which pull request to
+              # review, the second says why the review was requested.
+              | .text = "Review pull request #\($pr.number) in \($event_repo): \($pr.html_url)\n\nKind of review request: \(.kind)."
+            ) as $fire
           | if $pr.draft == true then skip("draft")
             elif $pr.user.type == "Bot" then skip("bot")
             elif $pr.head.repo == null or $pr.head.repo.full_name != $pr.base.repo.full_name then skip("fork")

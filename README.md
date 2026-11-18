@@ -83,6 +83,7 @@ Exactly one of:
 - `{"decision": "skip", "reason": "<reason>"}`: no review.
 - `{"decision": "lookup", "requester": "<login>"}`: look up whether the requester is a team member, then run the decision again with `membership` set. Only returned when `membership` is `null`.
 - `{"decision": "fire", "kind": "ready", "requester": "<login>", "pull_request": {"number": <n>, "url": "<url>"}, "text": "<request text>"}`: fire the routine trigger with `{"text": <text>}`.
+  The text is two paragraphs: `Review pull request #<n> in <owner/repo>: <url>`, then `Kind of review request: <kind>.`, which names the kind of review request, such as `ready`.
 
 ### Reasons for skipping
 
