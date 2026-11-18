@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Checks that request-decision/test reports broken or missing cases as failures instead of passing or stopping early.
+#
+# Each check copies the decision and its test script into a temporary directory, sets up the cases for that check,
+# runs the test script, and compares its exit status and output with what is expected.
+#
+# Exits non-zero if any check fails. Needs only bash and jq.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+work="$(mktemp -d)"
+trap 'rm -rf -- "$work"' EXIT
+
+failed=0
+
+# Makes a fresh copy of the scripts with an empty cases directory and prints its path.
+new_copy() {
+  local dir
+  dir="$(mktemp -d "$work/copy.XXXXXX")"
+  cp "$here/test" "$here/decide" "$here/decide.jq" "$dir/"
+  mkdir "$dir/cases"
+  echo "$dir"
+}
+
+# Adds a case that passes to a copy.
+add_good_case() {
+  mkdir "$1/cases/good"
+  echo '{"event_name": "push", "event": {}}' >"$1/cases/good/input.json"
+  "$1/decide" <"$1/cases/good/input.json" >"$1/cases/good/expected.json"
+}
+
+# check NAME COPY WANT_STATUS WANT_TEXT: runs the copy's test script and checks it exits with WANT_STATUS
+# ("zero" or "non-zero") and prints a line containing WANT_TEXT.
+check() {
+  local name="$1" copy="$2" want_status="$3" want_text="$4" output status=0
+  output="$("$copy/test" 2>&1)" || status=$?
+  local got_status=zero
+  [[ "$status" -eq 0 ]] || got_status=non-zero
+  if [[ "$got_status" == "$want_status" ]] && grep --quiet --fixed-strings -- "$want_text" <<<"$output"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: wanted a $want_status exit and the text \"$want_text\", got a $got_status exit and:"
+    sed 's/^/     /' <<<"$output"
+    failed=$((failed + 1))
+  fi
+}
+
+copy="$(new_copy)"
+add_good_case "$copy"
+check "a passing case passes" "$copy" zero "1 cases, 0 failed"
+
+copy="$(new_copy)"
+check "no cases fails" "$copy" non-zero "no cases found"
+
+copy="$(new_copy)"
+add_good_case "$copy"
+mkdir "$copy/cases/missing-expected"
+cp "$copy/cases/good/input.json" "$copy/cases/missing-expected/"
+check "a missing expected.json is a failed case" "$copy" non-zero "2 cases, 1 failed"
+
+copy="$(new_copy)"
+add_good_case "$copy"
+mkdir "$copy/cases/invalid-expected"
+cp "$copy/cases/good/input.json" "$copy/cases/invalid-expected/"
+echo '{not json' >"$copy/cases/invalid-expected/expected.json"
+check "an invalid expected.json is a failed case" "$copy" non-zero "2 cases, 1 failed"
+
+copy="$(new_copy)"
+add_good_case "$copy"
+mkdir "$copy/cases/missing-input"
+cp "$copy/cases/good/expected.json" "$copy/cases/missing-input/"
+check "a missing input.json is a failed case" "$copy" non-zero "2 cases, 1 failed"
+
+[[ "$failed" -eq 0 ]]
