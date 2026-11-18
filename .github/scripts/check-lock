@@ -7,11 +7,13 @@
 # - The lockfile is missing, but the pull request's base branch has it: fails, so deleting the lockfile cannot pass.
 # - Neither has it: only warns, so that the lockfile can be added later.
 #
-# Every outcome but a pass prints an annotation that carries what `gh actions-lock` made from the workflows, so it can
-# be reviewed and committed without installing the extension.
+# Every outcome but a pass prints a short annotation, and writes what `gh actions-lock` made from the workflows (the
+# lockfile and the changes to the workflows) to the job summary, so it can be reviewed and committed without installing
+# the extension.
 #
 # Environment: BASE_REF is the pull request's base branch, empty outside a pull request. GH_TOKEN is the token for
-# `gh actions-lock`, and for fetching the base branch.
+# `gh actions-lock`, and for fetching the base branch. GITHUB_STEP_SUMMARY is the runner's job summary file; without
+# it, only the annotation is printed.
 set -uo pipefail
 
 lockfile=.github/workflows/actions.lock
@@ -30,25 +32,41 @@ shielded() {
   echo "::$token::"
 }
 
-# Escapes text for a workflow command's message, ending each line with an escaped line break so that the message stays
-# on one line.
-escape() { sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk 'BEGIN { ORS = "%0A" } { print }'; }
-
-# Prints one annotation of level $1 and title $2: $3, then what `gh actions-lock` made.
+# Prints one short annotation of level $1 and title $2: $3. The annotation cannot carry the lockfile: GitHub limits an
+# annotation's size, and the lockfile (as text and as base64) and the diff can pass it. What `gh actions-lock` made goes
+# to the job summary, $GITHUB_STEP_SUMMARY, when the runner sets it, and the annotation points there.
 report() {
-  printf '::%s file=%s,title=%s::%s%%0A' "$1" "$lockfile" "$2" "$3"
-  git status --short -- .github/workflows | escape
-  if [ -f "$lockfile" ]; then
-    printf 'SHA-256 of the lockfile it made: %s%%0ABase64: %s%%0A' \
-      "$(sha256sum "$lockfile" | cut -d' ' -f1)" "$(base64 --wrap=0 "$lockfile")"
-    escape <"$lockfile"
+  printf '::%s file=%s,title=%s::%s' "$1" "$lockfile" "$2" "$3"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    printf ' The lockfile it made, and the changes to the workflows, are in the job summary.'
+    write_summary "$2" >>"$GITHUB_STEP_SUMMARY"
   fi
-  printf '%%0A'
-  git diff -- .github/workflows ':!.github/workflows/actions.lock' | escape
   echo
 }
 
-# Whether the base branch has the lockfile. A base branch that cannot be fetched fails the check, because a missing
+# Prints, as Markdown for the job summary, the title $1 and what `gh actions-lock` made: the changed workflow files, the
+# lockfile with its SHA-256 and base64, and the diff. Each goes in a fence that the text cannot end, a line of tildes
+# longer than any a workflow would hold. The summary is not read as workflow commands.
+write_summary() {
+  local fence=~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  printf '## %s\n\nChanged workflow files:\n\n%s\n' "$1" "$fence"
+  git status --short -- .github/workflows
+  printf '%s\n' "$fence"
+  if [ -f "$lockfile" ]; then
+    printf '\nSHA-256 of the lockfile it made: `%s`\n\nBase64:\n\n%s\n%s\n%s\n' \
+      "$(sha256sum "$lockfile" | cut -d' ' -f1)" "$fence" "$(base64 --wrap=0 "$lockfile")" "$fence"
+    printf '\nThe lockfile:\n\n%s\n' "$fence"
+    cat "$lockfile"
+    printf '%s\n' "$fence"
+  fi
+  printf '\nChanges to the workflows:\n\n%s\n' "$fence"
+  git diff -- .github/workflows ':!.github/workflows/actions.lock'
+  printf '%s\n\n' "$fence"
+}
+
+# Whether the base branch has the lockfile. Deleting a committed lockfile is guarded for pull requests only: BASE_REF
+# is empty on a push, so there is no base branch to compare with and base_has_lockfile stays false. On a push, a
+# missing lockfile only warns. A base branch that cannot be fetched fails the check, because a missing
 # lockfile could then pass unnoticed.
 base_has_lockfile=false
 if [ -n "$base_ref" ]; then

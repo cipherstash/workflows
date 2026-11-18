@@ -61,7 +61,7 @@ jobs:
   # is committed, fails unless `gh actions-lock --verify` passes and running `gh actions-lock` changes nothing, neither
   # the lockfile nor the workflows (it rewrites a commit-pinned `uses:` to the version tag, keeping the commit in the
   # lockfile, and GitHub refuses to start a workflow that has both). Until it is committed, only warns. Either way,
-  # the annotation carries what `gh actions-lock` made from this pull request's workflows, so it can be reviewed and
+  # the job summary carries what `gh actions-lock` made from this pull request's workflows, so it can be reviewed and
   # committed without installing the extension.
   actions-lock:
     runs-on: ubuntu-latest

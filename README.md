@@ -247,7 +247,7 @@ The workflow lockfile, `.github/workflows/actions.lock`, records the exact commi
 It is made by the `gh actions-lock` command and is never edited by hand.
 The lockfile is not committed yet, so `actions-lock` only warns for now.
 Once it is committed, `actions-lock` fails if the lockfile does not match the workflows.
-Either way, its annotation shows the lockfile `gh actions-lock` made from the pull request's workflows.
+Either way, a short annotation points to the job summary, which shows the lockfile `gh actions-lock` made from the pull request's workflows and the changes it made to them. This keeps the annotation under GitHub's size limit.
 Once the base branch has the lockfile, a pull request that deletes it fails the check.
 The check is `.github/scripts/check-lock`, tested by `tests/test_check_lock.py`.
 
