@@ -7,15 +7,105 @@ It is being built; the plan is in [issue #1](https://github.com/cipherstash/work
 
 The words this repository uses, such as *review request* and *team member*, are defined in [CONTEXT.md](CONTEXT.md).
 
+## Claude review
+
+[`.github/workflows/claude-review.yml`](.github/workflows/claude-review.yml) is a reusable workflow.
+It decides whether an event is a review request from a team member and, if it is, fires the Claude code-review routine trigger for that pull request.
+
+So far it handles one kind of review request, **Ready**: a non-draft pull request opened or reopened, or a draft marked ready for review.
+It skips drafts, pull requests from bots, and pull requests from forks, including deleted forks.
+It reviews a pull request only if its author is a team member.
+A pull request opened by the review agent is reviewed without a membership check, because the agent opens most pull requests.
+
+A failed request never turns a pull request's checks red.
+It shows as an error in the workflow run instead.
+
+### Adding it to a repository
+
+Copy [`examples/claude-review.yml`](examples/claude-review.yml) to `.github/workflows/claude-review.yml` in the repository.
+It pins the reusable workflow to a full commit SHA, with the version in a comment.
+
+The caller needs these settings, which CipherStash sets once for the whole organisation:
+
+| Name | Kind | What it is |
+| --- | --- | --- |
+| `CLAUDE_ROUTINE_TOKEN` | secret | The code-review routine's bearer token. |
+| `CLAUDE_REVIEW_APP_ID` | secret | The id of the membership GitHub App. |
+| `CLAUDE_REVIEW_APP_PRIVATE_KEY` | secret | The membership GitHub App's private key. |
+| `CLAUDE_ROUTINE_TRIGGER_ID` | variable | The routine's trigger id, which starts `trig_`. |
+
+The membership GitHub App is installed on the organisation with only the "Members: read" permission.
+The workflow uses it to get a short-lived token and look up whether the pull request's author is in the team.
+
+### Inputs and secrets
+
+| Input | Required | Default | What it is |
+| --- | --- | --- | --- |
+| `routine-trigger-id` | yes | | The routine's trigger id (`trig_…`). |
+| `team` | no | `developers` | The slug of the team, in the calling repository's organisation, whose members may request a review. |
+| `review-agent` | no | `cipherstash-agent` | The login of the review agent. |
+
+All three secrets, `CLAUDE_ROUTINE_TOKEN`, `CLAUDE_REVIEW_APP_ID` and `CLAUDE_REVIEW_APP_PRIVATE_KEY`, are required and must be passed explicitly, as the example does.
+
+### What a run shows
+
+A run has two jobs:
+
+- `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. It never fails.
+- `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. A failed request shows as a failed step, but the job and the check stay green.
+
+`fire` holds no permissions.
+Only one `fire` runs per pull request at a time: a second waits rather than cancelling the first.
+
+## The request decision
+
+The request decision is the part that reads a GitHub event and decides whether it is a review request to send on.
+It is one `jq` program, kept inline in the reusable workflow as the `decide` job's `REQUEST_DECISION` variable.
+It has to be inline because a reusable workflow runs in the calling repository and cannot read files from this one.
+
+`request-decision/decide` reads the program out of the workflow with `yq` and runs it, so the tests run exactly what ships.
+
+### Input
+
+One JSON object:
+
+| Field | What it is |
+| --- | --- |
+| `event_name` | The GitHub event name, such as `pull_request`. |
+| `event` | The event payload GitHub delivers. |
+| `review_agent` | The review agent's login. |
+| `membership` | `null` before the membership lookup; after it, `"member"`, `"not-member"` or `"lookup-failed"`. |
+
+### Output
+
+Exactly one of:
+
+- `{"decision": "skip", "reason": "<reason>"}`: no review.
+- `{"decision": "lookup", "requester": "<login>"}`: look up whether the requester is a team member, then run the decision again with `membership` set. Only returned when `membership` is `null`.
+- `{"decision": "fire", "kind": "ready", "requester": "<login>", "pull_request": {"number": <n>, "url": "<url>"}, "text": "<request text>"}`: fire the routine trigger with `{"text": <text>}`.
+
+### Reasons for skipping
+
+| Reason | When |
+| --- | --- |
+| `not-a-review-request` | The event is not a kind of review request, such as a push to a pull request (`synchronize`) or an issue event. |
+| `draft` | The pull request is a draft. |
+| `bot` | The pull request's author is a bot. No membership lookup is made. |
+| `fork` | The pull request comes from a fork, or from a fork that was deleted. |
+| `not-a-team-member` | The requester is not an active member of the team. |
+| `membership-lookup-failed` | Team membership could not be checked. The run shows an error. |
+
+The workflow adds one more reason of its own, `decision-failed`, if the decision itself could not run.
+The run shows an error for it.
+
 ## Checks
 
 Every pull request runs two checks:
 
-- `actionlint` over the workflows in this repository.
+- `actionlint` over the workflows in this repository and the example callers in `examples/`.
 - The request decision's saved cases, run by `request-decision/test`.
 
-The request decision is the part that reads a GitHub event and decides whether it is a review request to send on.
-Its rules are tested against saved event payloads, so the tests need no network and run anywhere with `bash` and `jq`:
+The request decision's rules are tested against saved event payloads, so the tests need no network and run anywhere with `bash`, `jq` and `yq`:
 
 ```sh
 request-decision/test
@@ -23,7 +113,7 @@ request-decision/test
 
 ### Adding a test case
 
-1. Make a new directory under `request-decision/cases/`, named for what it checks, such as `draft-pull-request-skips`.
-2. Add `input.json`: an object with `event_name` (the GitHub event name, such as `pull_request`) and `event` (the event payload, trimmed to the fields that matter).
+1. Make a new directory under `request-decision/cases/`, named for what it checks, such as `ready-draft-skips`.
+2. Add `input.json`: the decision's input, with `event_name`, `event` (the event payload, trimmed to the fields that matter), `review_agent` (usually `"cipherstash-agent"`) and `membership` (`null` to test the decision before a lookup).
 3. Add `expected.json`: the decision expected for that input, such as `{"decision": "skip", "reason": "draft"}`.
 4. Run `request-decision/test` and check the new case passes. A case that fails prints the difference between the expected and actual decision.
