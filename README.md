@@ -99,12 +99,20 @@ Exactly one of:
 
 An event that has no pull request author, such as a payload whose `user` is `null`, is skipped as `not-a-review-request`.
 
+## Python steps
+
+Some steps, such as the membership lookup, are written in Python.
+They use only Python's standard library and keep to Python 3.10, so nothing is installed when they run.
+Like the request decision, each one is kept inline in the reusable workflow, with `shell: python3 {0}` and an `id`, because a reusable workflow cannot read files from this repository.
+The unit tests in `tests/` read each step's script out of the workflow, so they test exactly what ships.
+
 ## Checks
 
-Every pull request runs two checks:
+Every pull request runs three checks:
 
 - `actionlint` over the workflows in this repository and the example callers in `examples/`.
 - The request decision's saved cases, run by `request-decision/test`.
+- The unit tests of the Python steps, in `tests/`.
 
 The request decision's rules are tested against saved event payloads, so the tests need no network and run anywhere with `bash`, `jq` and `yq`:
 
@@ -118,3 +126,22 @@ request-decision/test
 2. Add `input.json`: the decision's input, with `event_name`, `event` (the event payload, trimmed to the fields that matter), `review_agent` (usually `"cipherstash-agent"`) and `membership` (`null` to test the decision before a lookup).
 3. Add `expected.json`: the decision expected for that input, such as `{"decision": "skip", "reason": "draft"}`.
 4. Run `request-decision/test` and check the new case passes. A case that fails prints the difference between the expected and actual decision.
+
+### Running the unit tests
+
+The unit tests need `python3` (3.10 or later), `bash` and `yq`, and no network: a test that needs GitHub's API starts a stand-in server on 127.0.0.1.
+
+```sh
+python3 -m unittest discover --start-directory tests
+```
+
+### Adding a unit test
+
+`tests/harness.py` runs one step of the reusable workflow on its own:
+
+- `run_step(job, step_id, env, api_url=...)` reads the step's script out of the workflow with `yq`, runs it with the step's shell, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`) and its `::error::` annotations (`.errors()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`.
+- `StubServer(routes)` stands in for GitHub's API. `routes` maps a path to a status and body, to `StubServer.HANG` for an answer that never comes, or to `StubServer.DROP` for a connection closed without one. It records every request.
+- `substitutions` replaces text in the script before it runs, such as a timeout constant lowered so a test does not wait. Each piece of text must appear exactly once in the script.
+
+1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
+2. Run the unit tests and check the new test passes.
