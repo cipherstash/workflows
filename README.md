@@ -113,7 +113,7 @@ All three secrets, `CLAUDE_ROUTINE_TOKEN`, `CLAUDE_REVIEW_APP_ID` and `CLAUDE_RE
 
 A run has up to three jobs:
 
-- `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
+- `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. A line break in a reason is flattened to a space, so a reason cannot start a workflow command. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
 - `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
 - `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, never for Ready or a requested reviewer, and only once `fire` has sent the request. It sends the reaction once, with no retry, and does not follow a redirect. HTTP `201` (added) or `200` (already there) counts as reacted. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
 
@@ -173,7 +173,7 @@ Exactly one of:
 | `review-agent` | The comment command's author, or the person who requested the review, is the review agent. No membership lookup is made. |
 | `fork` | The pull request comes from a fork, or from a fork that was deleted (Ready and requested reviewer). |
 | `not-a-team-member` | The requester is not an active member of the team. |
-| `membership-lookup-failed` | Team membership could not be checked, or the lookup's answer was not one of `member` or `not-member`. The run shows an error. |
+| `membership-lookup-failed` | Team membership could not be checked: GitHub could not be reached within 30 seconds, answered with an error status or a redirect (the lookup does not follow redirects), or gave an answer that is malformed or larger than 64 KiB. The run shows an error. |
 | `decision-failed` | The decision itself could not run, or did not finish. The workflow adds this reason itself, not the `jq` program. The run shows an error. |
 
 An event that has no pull request author, comment author or sender to act as the requester, such as a payload whose `user` is `null`, is skipped as `not-a-review-request`.
@@ -219,8 +219,11 @@ python3 -m unittest discover --start-directory tests
 `tests/harness.py` runs one step of the reusable workflow on its own:
 
 - `run_step(job, step_id, env, api_url=..., repository=...)` reads the step's script out of the workflow with `yq`, runs it with the step's shell, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`), its `::error::` annotations (`.errors()`) and its `::warning::` annotations (`.warnings()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`, `GITHUB_API_URL` (`api_url`) and `GITHUB_REPOSITORY` (`repository`).
-- `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body, to `StubServer.HANG` for an answer that never comes, or to `StubServer.DROP` for a connection closed without one, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
+- `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body (and, optionally, headers to add, such as a redirect's `Location`), to `StubServer.HANG` for an answer that never comes, to `StubServer.DROP` for a connection closed without one, or to `StubServer.drip(status)` for an answer whose body never ends, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
 - `substitutions` replaces text in the script before it runs, such as a timeout constant lowered so a test does not wait, or the routine API's fixed address swapped for the stand-in server's. Each piece of text must appear exactly once in the script.
 
 1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
 2. Run the unit tests and check the new test passes.
+
+The Python steps are inline scripts and cannot share a module, so each step that makes a request keeps its own copy of the shared scaffolding: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener` and `escaped`, and `error` and `output` in each step that has them.
+`tests/test_python_steps.py` checks that every copy is identical, so a change to one copy must be made to all of them.
