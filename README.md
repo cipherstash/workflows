@@ -255,7 +255,7 @@ python3 -m unittest discover --start-directory tests
 
 The `tests` check runs them on Python 3.10, 3.12 and 3.14.
 3.10 is the oldest Python the steps support.
-3.14 is the Python on GitHub's `ubuntu-latest` runners now, which the reusable workflow uses.
+3.14 is there to cover the runner's own `python3`, whatever `ubuntu-latest` provides, which the reusable workflow uses.
 
 ### Adding a unit test
 
@@ -303,7 +303,7 @@ To run them yourself, install the pinned versions into a virtual environment, th
 
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install --require-hashes --requirement .github/python-checks/requirements.txt
+.venv/bin/pip install --only-binary :all: --require-hashes --requirement .github/python-checks/requirements.txt
 .venv/bin/ruff check .
 .venv/bin/mypy
 ```
@@ -312,7 +312,8 @@ Ruff and mypy are installed only for this repository's own checks.
 The reusable workflow installs nothing: it runs its steps with the runner's `python3`.
 
 `.github/python-checks/requirements.txt` pins Ruff, mypy and every package mypy needs, each by version and the hash of every file PyPI publishes for it.
-Nothing updates these pins, because Dependabot does not read them, so update them by hand:
+Dependabot (`.github/dependabot.yml`) checks both requirements files every week (`.github/python-checks` and `.github/zizmor`, with the same 7-day cooldown as for actions) and opens a pull request for a new release.
+I could not check Dependabot's documentation for whether it rewrites the `--hash` lines of a requirements file, so look at each of its pull requests: if the hashes are not updated, or do not match, update them by hand:
 
 1. Pick a release at least 7 days old.
 2. Change its version in the file, and replace its hashes with those listed at `https://pypi.org/pypi/<package>/<version>/json`.
