@@ -174,7 +174,7 @@ The `tests` check runs them on Python 3.10, 3.12 and 3.14.
 
 `tests/harness.py` runs one step of the reusable workflow on its own:
 
-- `run_step(job, step_id, env, api_url=...)` runs the step's file from `steps/` (or, for an inline step, reads its script out of the workflow with `yq`) with `python3`, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`) and its `::error::` annotations (`.errors()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`.
+- `run_step(job, step_id, env, api_url=...)` runs the step's file from `steps/` with `python3`, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`) and its `::error::` annotations (`.errors()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`.
 - `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body (and, optionally, headers to add, such as a redirect's `Location`), to `StubServer.HANG` for an answer that never comes, to `StubServer.DROP` for a connection closed without one, or to `StubServer.drip(status)` for an answer whose body never ends, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
 - `substitutions` replaces text in the step's code before it runs, such as a timeout constant lowered so a test does not wait, or the routine API's fixed address swapped for the stand-in server's. For a step file, the code includes `steps/helpers.py`. Each piece of text must appear exactly once in all of it. The files in `steps/` are not changed: the harness runs a changed copy.
 - `run_step_as_written(job, step_id, env)` runs a step's `run` script exactly as the workflow writes it, with `bash`. It checks what a step does around its file, such as when the file was not checked out.
@@ -182,10 +182,8 @@ The `tests` check runs them on Python 3.10, 3.12 and 3.14.
 1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
 2. Run the unit tests and check the new test passes.
 
-Every Python step now runs from a file in `steps/`, so none keeps its own copy of the shared code.
-A step written inline in the workflow, with `shell: python3 {0}`, could not import `steps/helpers.py`.
-`tests/test_python_steps.py` lists the inline steps, which is none, and checks that any copy of the shared code in one is identical to `steps/helpers.py`.
-So a new inline step fails the tests until it is added to that list, and then its copies are checked.
+Every Python step runs from a file in `steps/`, so none keeps its own copy of the shared code.
+`tests/test_python_steps.py` fails if a step in the workflow runs Python inline, with a Python `shell:`.
 
 `tests/test_decision_file.py` checks that each file the workflow runs from its checkout exists in this repository and is included in the checkout of its own job, and that the `decide` and `fire` jobs check out this repository in the same way. So a renamed file fails the tests rather than every run.
 
