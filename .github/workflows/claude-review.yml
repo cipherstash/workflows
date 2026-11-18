@@ -162,12 +162,17 @@ jobs:
           import json
           import os
           import re
+          import signal
           import urllib.error
           import urllib.request
           import uuid
 
           # Seconds to wait to connect, and then for each read of the answer.
           TIMEOUT_SECONDS = 10
+          # Seconds one request may take in all, however slowly the answer arrives.
+          TOTAL_SECONDS = 30
+          # The most of an answer's body that is read. A membership is far smaller; a larger answer is not one.
+          MAX_BODY_BYTES = 64 * 1024
 
           # Names go into the URL, so each must start with a letter, digit or (for a team) underscore, which keeps "."
           # and ".." out. A login is letters and digits joined by single hyphens (or underscores, for managed users).
@@ -178,6 +183,10 @@ jobs:
 
           class LookupFailed(Exception):
               """Membership could not be checked; the message says why."""
+
+
+          class TotalTimeout(Exception):
+              """One request took longer than TOTAL_SECONDS."""
 
 
           def error(message):
@@ -199,12 +208,18 @@ jobs:
                   return None
 
 
-          # Proxy settings in the environment are honoured, as curl honoured them before.
+          # urllib.request reads the proxy settings of the environment (http_proxy, https_proxy and no_proxy, in either
+          # case) by default. Unlike curl, it does not read ALL_PROXY.
           opener = urllib.request.build_opener(NoRedirects)
 
 
+          def on_total_timeout(signum, frame):
+              raise TotalTimeout()
+
+
           def api(path, token):
-              """GETs path from the GitHub API and returns (status, body). The token is only ever a request header."""
+              """GETs path from the GitHub API and returns (status, body), reading at most MAX_BODY_BYTES + 1 bytes of an
+              answer. The token is only ever a request header."""
               request = urllib.request.Request(
                   f"{os.environ['GITHUB_API_URL']}/{path}",
                   headers={
@@ -213,16 +228,30 @@ jobs:
                       "X-GitHub-Api-Version": "2022-11-28",
                   },
               )
+              result = None
+              previous = signal.signal(signal.SIGALRM, on_total_timeout)
+              signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
               try:
-                  with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-                      return response.status, response.read()
-              except urllib.error.HTTPError as answer:
-                  return answer.code, b""
-              except (OSError, http.client.HTTPException, ValueError) as failure:
+                  try:
+                      with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                          result = (response.status, response.read(MAX_BODY_BYTES + 1))
+                  except urllib.error.HTTPError as answer:
+                      # The body of a status other than 200 is never used.
+                      answer.close()
+                      result = (answer.code, b"")
+                  # Disarmed as soon as the answer is complete, so a late alarm cannot undo it.
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+                  return result
+              except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
+                  if result is not None:  # The alarm came after the answer was complete.
+                      return result
                   # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
                   # reported.
                   reason = getattr(failure, "reason", failure)
                   raise LookupFailed(f"Could not reach GitHub to look up team membership ({type(reason).__name__})")
+              finally:
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+                  signal.signal(signal.SIGALRM, previous)
 
 
           def look_up(token, org, team, requester):
@@ -238,7 +267,7 @@ jobs:
               status, body = api(f"orgs/{org}/teams/{team}/memberships/{requester}", token)
               if status == 200:
                   try:
-                      membership = json.loads(body)
+                      membership = json.loads(body) if len(body) <= MAX_BODY_BYTES else None
                   except ValueError:
                       membership = None
                   if not isinstance(membership, dict):
@@ -451,7 +480,8 @@ jobs:
                   return None
 
 
-          # Proxy settings in the environment are honoured, as curl honoured them before.
+          # urllib.request reads the proxy settings of the environment (http_proxy, https_proxy and no_proxy, in either
+          # case) by default. Unlike curl, it does not read ALL_PROXY.
           opener = urllib.request.build_opener(NoRedirects)
 
 
@@ -474,25 +504,35 @@ jobs:
                       "Content-Type": "application/json",
                   },
               )
-              signal.signal(signal.SIGALRM, on_total_timeout)
+              result = None
+              previous = signal.signal(signal.SIGALRM, on_total_timeout)
               signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
               try:
                   try:
                       with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-                          return response.status, response.read(4096)
+                          result = (response.status, response.read(4096))
                   except urllib.error.HTTPError as answer:
                       try:
                           answer_body = answer.read(4096)
                       except (OSError, http.client.HTTPException):
                           answer_body = b""
-                      return answer.code, answer_body
+                      finally:
+                          answer.close()
+                      result = (answer.code, answer_body)
+                  # Disarmed as soon as the answer is complete, so a late alarm cannot turn an accepted request into a
+                  # failure.
+                  signal.setitimer(signal.ITIMER_REAL, 0)
+                  return result
               except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
+                  if result is not None:  # The alarm came after the answer was complete.
+                      return result
                   # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
                   # reported.
                   reason = getattr(failure, "reason", failure)
                   raise NotSent(f"Could not reach the routine trigger ({type(reason).__name__}); no review was requested")
               finally:
                   signal.setitimer(signal.ITIMER_REAL, 0)
+                  signal.signal(signal.SIGALRM, previous)
 
 
           def fire(token, trigger_id, decision):

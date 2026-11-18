@@ -51,7 +51,7 @@ All three secrets, `CLAUDE_ROUTINE_TOKEN`, `CLAUDE_REVIEW_APP_ID` and `CLAUDE_RE
 
 A run has two jobs:
 
-- `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
+- `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. A line break in a reason is flattened to a space, so a reason cannot start a workflow command. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
 - `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
 
 `fire` holds no permissions.
@@ -94,7 +94,7 @@ Exactly one of:
 | `bot` | The pull request's author is a bot. No membership lookup is made. |
 | `fork` | The pull request comes from a fork, or from a fork that was deleted. |
 | `not-a-team-member` | The requester is not an active member of the team. |
-| `membership-lookup-failed` | Team membership could not be checked, or the lookup's answer was not one of `member` or `not-member`. The run shows an error. |
+| `membership-lookup-failed` | Team membership could not be checked: GitHub could not be reached within 30 seconds, answered with an error status or a redirect (the lookup does not follow redirects), or gave an answer that is malformed or larger than 64 KiB. The run shows an error. |
 | `decision-failed` | The decision itself could not run, or did not finish. The workflow adds this reason itself, not the `jq` program. The run shows an error. |
 
 An event that has no pull request author, such as a payload whose `user` is `null`, is skipped as `not-a-review-request`.

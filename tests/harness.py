@@ -2,11 +2,11 @@
 
 A reusable workflow runs in the calling repository, so its steps' scripts are kept inline in
 .github/workflows/claude-review.yml. The harness reads a step's script out of the workflow with yq, so the tests run
-exactly what ships, and runs it the way the runner would: with the step's shell, and with GITHUB_OUTPUT,
+exactly what ships, and runs it the way the runner would: with python3, and with GITHUB_OUTPUT,
 GITHUB_STEP_SUMMARY and RUNNER_TEMP pointing at temporary files. Nothing else is inherited from the environment
 running the tests, so no proxy settings or real tokens leak in.
 
-Needs python3 (3.10 or later), bash and yq. Either yq works: mikefarah's (as on GitHub's ubuntu-latest runners) or
+Needs python3 (3.10 or later) and yq. Either yq works: mikefarah's (as on GitHub's ubuntu-latest runners) or
 the Python jq wrapper.
 
 StubServer is a GitHub API stand-in on 127.0.0.1, answering each path with the status and body a test gives it.
@@ -24,11 +24,8 @@ import threading
 
 WORKFLOW = pathlib.Path(__file__).resolve().parent.parent / ".github" / "workflows" / "claude-review.yml"
 
-# Set by the runner for every step; a test passes the step's own inputs, which must be declared in the step's env.
 # The shell a Python step names, so the runner runs its script with python3.
 PYTHON_SHELL = "python3 {0}"
-
-RUNNER_VARIABLES = {"GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_API_URL", "RUNNER_TEMP", "PATH", "LC_ALL"}
 
 
 def _yq(query):
@@ -106,6 +103,15 @@ def python_steps():
     return steps
 
 
+def python_steps_without_id():
+    """The names of the python3 steps that have no id, which python_steps cannot list and the tests cannot find."""
+    names = []
+    for job in _yq(".jobs | keys | .[]").split():
+        query = f'.jobs.{job}.steps[] | select(.shell == "{PYTHON_SHELL}" and .id == null) | (.name // "(unnamed)")'
+        names.extend(line for line in _yq(query).split("\n") if line)
+    return names
+
+
 @functools.lru_cache(maxsize=None)
 def step_env_names(job, step_id):
     """The names in the step's env block."""
@@ -139,13 +145,9 @@ def run_step(job, step_id, env, api_url="http://127.0.0.1:9", substitutions=None
         summary_path.touch()
         script_path = temp / "step"
         script_path.write_text(script, encoding="utf-8")
-        if shell == PYTHON_SHELL:
-            command = [sys.executable, str(script_path)]
-        elif shell in ("", "bash"):
-            # GitHub's default for a run step on Linux.
-            command = ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script_path)]
-        else:
+        if shell != PYTHON_SHELL:
             raise AssertionError(f"step {step_id!r} uses shell {shell!r}, which the harness cannot run")
+        command = [sys.executable, str(script_path)]
         runner_temp = temp / "runner"
         runner_temp.mkdir()
         full_env = {
@@ -178,14 +180,16 @@ def closed_port_url():
 class StubServer:
     """A stand-in for the GitHub API on 127.0.0.1.
 
-    routes maps a path to (status, body), to HANG for an answer that never comes, or to DROP for a connection closed
-    without an answer, for GET and POST alike. A path with no route answers 404. Every request is recorded in requests
+    routes maps a path to (status, body), to HANG for an answer that never comes, to DROP for a connection closed
+    without an answer, or to DRIP for a 200 answer that sends one byte every 50 ms and never ends, so no single read
+    times out but the answer never completes, for GET and POST alike. A path with no route answers 404. Every request is recorded in requests
     as (method, path, headers), and its body, as bytes (empty for a GET), at the same place in bodies. Headers are
     looked up by name ignoring case, as HTTP does. Use as a context manager.
     """
 
     HANG = object()
     DROP = object()
+    DRIP = object()
 
     def __init__(self, routes=None):
         self.routes = dict(routes or {})
@@ -213,6 +217,18 @@ class StubServer:
                     return
                 if route is StubServer.DROP:
                     # Closes the connection without an answer.
+                    self.close_connection = True
+                    return
+                if route is StubServer.DRIP:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    try:
+                        while not stub._release.wait(0.05):
+                            self.wfile.write(b" ")
+                            self.wfile.flush()
+                    except OSError:
+                        pass
                     self.close_connection = True
                     return
                 status, body = route

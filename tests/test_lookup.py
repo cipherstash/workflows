@@ -1,6 +1,7 @@
 """The decide job's membership lookup step: how each answer GitHub can give becomes a membership."""
 
 import json
+import time
 import unittest
 
 from harness import StubServer, closed_port_url, run_step
@@ -92,9 +93,11 @@ class GivenGitHubAnswersSomethingElse(LookupTest):
         self.assert_failed(result, "GitHub answered HTTP 403")
 
     def test_a_redirect_is_not_followed_and_fails_the_lookup(self):
-        result = self.lookup({MEMBERSHIP_PATH: (302, "")})
-        self.assert_failed(result, "GitHub answered HTTP 302")
-        self.assertEqual(self.stub.paths(), [MEMBERSHIP_PATH])
+        for status in (301, 302, 303, 307, 308):
+            with self.subTest(status=status):
+                result = self.lookup({MEMBERSHIP_PATH: (status, "")})
+                self.assert_failed(result, f"GitHub answered HTTP {status}")
+                self.assertEqual(self.stub.paths(), [MEMBERSHIP_PATH])
 
     def test_a_body_that_is_not_json_fails_the_lookup(self):
         result = self.lookup({MEMBERSHIP_PATH: (200, "<html>not json</html>")})
@@ -103,6 +106,20 @@ class GivenGitHubAnswersSomethingElse(LookupTest):
     def test_a_body_that_is_not_an_object_fails_the_lookup(self):
         result = self.lookup({MEMBERSHIP_PATH: (200, json.dumps(["active"]))})
         self.assert_failed(result, "GitHub's answer was not a membership")
+
+    def test_an_answer_larger_than_a_membership_fails_the_lookup_as_malformed(self):
+        body = json.dumps({"state": "active", "padding": "x" * 70_000})
+        result = self.lookup({MEMBERSHIP_PATH: (200, body)})
+        self.assert_failed(result, "GitHub's answer was not a membership")
+
+    def test_an_answer_that_never_ends_is_cut_off_after_the_total_time(self):
+        # The stub sends a byte every 50 ms, so no single read times out (the per-read timeout stays at its 10 s): only
+        # the total time can end the request.
+        started = time.monotonic()
+        result = self.lookup({MEMBERSHIP_PATH: StubServer.DRIP}, substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
+        elapsed = time.monotonic() - started
+        self.assert_failed(result, "Could not reach GitHub to look up team membership (TotalTimeout)")
+        self.assertLess(elapsed, 5, "the lookup ran on past its total time")
 
     def test_no_answer_in_time_fails_the_lookup(self):
         result = self.lookup({MEMBERSHIP_PATH: StubServer.HANG}, substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"})
@@ -142,17 +159,17 @@ class GivenNoUsableToken(LookupTest):
         self.assertEqual(stub.paths(), [])
 
 
-    def test_an_organisation_name_cannot_add_a_second_annotation(self):
-        result = self.lookup(APP_TOKEN="", ORG="cipherstash\n::error::injected")
-        self.assert_failed(result, "installed on cipherstash%0A::error::injected with Members: read")
-
-
 class GivenANameThatIsNotValid(LookupTest):
     INVALID = {
         "ORG": ["", "-cipherstash", "cipher/stash", "..", "cipher stash", "cipherstash\n"],
         "TEAM": ["", ".", "..", "-team", "dev/../admins", "dev%2F", "dév"],
         "REQUESTER": ["", "-alice", "alice-", "al--ice", "al.ice", "alice/x", "alice\n", "alice?x=1"],
     }
+
+    def test_a_name_with_a_newline_cannot_add_a_second_annotation(self):
+        # The token step failed, so the message names the organisation, which is where the newline arrives.
+        result = self.lookup(APP_TOKEN="", ORG="cipherstash\n::error::injected")
+        self.assert_failed(result, "installed on cipherstash%0A::error::injected with Members: read")
 
     def test_each_invalid_name_fails_the_lookup_without_asking_github(self):
         for name, values in self.INVALID.items():
