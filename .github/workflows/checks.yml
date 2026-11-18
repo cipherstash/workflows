@@ -1,4 +1,5 @@
-# Checks every pull request to this repository: lints the workflows and runs the request decision's saved cases.
+# Checks every pull request to this repository: lints the workflows and the example callers, and runs the request
+# decision's saved cases.
 name: Checks
 
 on:
@@ -18,9 +19,10 @@ jobs:
         with:
           persist-credentials: false
       # Go's module proxy and checksum database verify the pinned version. shellcheck, which actionlint uses for
-      # `run:` scripts, is preinstalled on ubuntu-latest.
+      # `run:` scripts, is preinstalled on ubuntu-latest. Files are named explicitly so the example caller workflows,
+      # which are not under .github/workflows, are linted too.
       - name: actionlint
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color .github/workflows/*.yml examples/*.yml
 
   request-decision:
     runs-on: ubuntu-latest
