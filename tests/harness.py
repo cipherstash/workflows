@@ -15,11 +15,13 @@ the Python jq wrapper.
 StubServer is a GitHub API stand-in on 127.0.0.1, answering each path with the status and body a test gives it.
 """
 
+import contextlib
 import email.message
 import functools
 import http.server
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 import sys
@@ -46,6 +48,11 @@ def _yq(query):
 
 def _step_query(job, step_id):
     return f'.jobs.{job}.steps[] | select(.id == "{step_id}")'
+
+
+def step_field(job, step_id, path):
+    """yq's raw output for path (such as .with.path or ."continue-on-error") in the step, without its line break."""
+    return _yq(f"{_step_query(job, step_id)} | {path}").strip()
 
 
 class StepResult:
@@ -146,6 +153,20 @@ def checked_out_file(job, step_id, name):
 def step_file_path(job, step_id):
     """The step file, in this repository, that the step's STEP_FILE names in the workflow's checkout."""
     return checked_out_file(job, step_id, "STEP_FILE")
+
+
+@contextlib.contextmanager
+def step_file_copy(job, step_id, helpers_source=None):
+    """Copies the step's file into a temporary directory of its own and yields the copy's path, for a step whose
+    checkout is partial or broken: helpers_source, if given, is written beside it as helpers.py, which is otherwise
+    missing."""
+    with tempfile.TemporaryDirectory() as temp:
+        step_file = step_file_path(job, step_id)
+        copy = pathlib.Path(temp) / step_file.name
+        shutil.copy(step_file, copy)
+        if helpers_source is not None:
+            (copy.parent / "helpers.py").write_text(helpers_source, encoding="utf-8")
+        yield copy
 
 
 @functools.cache

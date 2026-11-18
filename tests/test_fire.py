@@ -1,12 +1,18 @@
 """The fire job's send step: how each answer the routine trigger can give becomes sent, or an error."""
 
 import json
-import shutil
-import tempfile
 import time
 import unittest
 
-from harness import ROOT, StubServer, _yq, closed_port_url, run_step, run_step_as_written
+from harness import (
+    StubServer,
+    closed_port_url,
+    run_step,
+    run_step_as_written,
+    step_field,
+    step_file_copy,
+    step_file_path,
+)
 
 TOKEN = "sk-ant-unitTestRoutineTokenThatMustNeverBePrinted0001"
 TRIGGER_ID = "trig_01AbCdEf"
@@ -199,58 +205,52 @@ class GivenTheStepIsNotSetUp(FireTest):
                 self.assertEqual(self.stub.requests, [])
 
 
+# The step's own error when it could not get its files, so it runs nothing.
+NOT_CHECKED_OUT = (
+    "Could not get the routine call's step file (checkout failed or file missing); no review was requested"
+)
+FIRE = step_file_path("fire", "send")
+
+
 class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
     # The fire job checks out the step file from this repository. If that failed, the step's own script reports it.
+
+    def assert_one_error_and_nothing_sent(self, result):
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("sent", result.outputs)
+        self.assertEqual(result.errors(), [NOT_CHECKED_OUT])
+        self.assertNotIn(TOKEN, result.everything())
 
     def test_without_the_file_nothing_is_sent_and_an_error_says_why(self):
         result = run_step_as_written(
             "fire", "send", inputs(STEP_FILE="/nonexistent/steps/fire.py", CHECKOUT_OUTCOME="success")
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("sent", result.outputs)
-        self.assertEqual(
-            result.errors(),
-            ["Could not get the routine call's step file (checkout failed or file missing); no review was requested"],
-        )
-        self.assertNotIn(TOKEN, result.everything())
+        self.assert_one_error_and_nothing_sent(result)
 
     def test_a_failed_step_does_not_turn_the_check_red(self):
-        query = '.jobs.fire.steps[] | select(.id == "send") | ."continue-on-error"'
-        self.assertEqual(_yq(query).strip(), "true")
+        self.assertEqual(step_field("fire", "send", '."continue-on-error"'), "true")
 
     def test_with_the_file_the_step_runs_it(self):
         # An invalid trigger id stops the file before any request, so this runs without a network.
         result = run_step_as_written(
             "fire",
             "send",
-            inputs(CHECKOUT_OUTCOME="success", STEP_FILE=str(ROOT / "steps" / "fire.py"), TRIGGER_ID="not-a-trigger"),
+            inputs(CHECKOUT_OUTCOME="success", STEP_FILE=str(FIRE), TRIGGER_ID="not-a-trigger"),
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("sent", result.outputs)
         self.assertEqual(len(result.errors()), 1, result.stdout)
         self.assertIn("routine-trigger-id is not a trigger id", result.errors()[0])
 
-    def assert_one_error_and_nothing_sent(self, result):
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn("sent", result.outputs)
-        self.assertEqual(
-            result.errors(),
-            ["Could not get the routine call's step file (checkout failed or file missing); no review was requested"],
-        )
-        self.assertNotIn(TOKEN, result.everything())
-
     def test_with_the_file_but_not_its_helper_module_one_error_says_why_and_nothing_is_sent(self):
         # A partial checkout: fire.py imports helpers.py outside any try, so running it would end in a traceback.
-        with tempfile.TemporaryDirectory() as temp:
-            shutil.copy(ROOT / "steps" / "fire.py", temp)
-            result = run_step_as_written(
-                "fire", "send", inputs(CHECKOUT_OUTCOME="success", STEP_FILE=f"{temp}/fire.py")
-            )
+        with step_file_copy("fire", "send") as step_file:
+            result = run_step_as_written("fire", "send", inputs(CHECKOUT_OUTCOME="success", STEP_FILE=str(step_file)))
         self.assert_one_error_and_nothing_sent(result)
 
     def test_when_the_checkout_failed_nothing_is_sent_even_if_the_files_are_there(self):
         result = run_step_as_written(
-            "fire", "send", inputs(CHECKOUT_OUTCOME="failure", STEP_FILE=str(ROOT / "steps" / "fire.py"))
+            "fire", "send", inputs(CHECKOUT_OUTCOME="failure", STEP_FILE=str(FIRE))
         )
         self.assert_one_error_and_nothing_sent(result)
 

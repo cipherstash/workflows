@@ -5,7 +5,7 @@ import time
 import unittest
 from typing import ClassVar
 
-from harness import ROOT, StubServer, closed_port_url, run_step, run_step_as_written
+from harness import StubServer, closed_port_url, run_step, run_step_as_written, step_file_path
 
 TOKEN = "ghs_unitTestTokenThatMustNeverBePrinted0001"
 MEMBERSHIP_PATH = "/orgs/cipherstash/teams/developers/memberships/alice"
@@ -206,7 +206,7 @@ class GivenANameThatIsNotValid(LookupTest):
 
 class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
     def test_the_run_line_starts_the_lookup_file(self):
-        env = inputs(TOKEN_OUTCOME="failure", APP_TOKEN="", STEP_FILE=str(ROOT / "steps" / "lookup.py"))
+        env = inputs(TOKEN_OUTCOME="failure", APP_TOKEN="", STEP_FILE=str(step_file_path("decide", "lookup")))
         result = run_step_as_written("decide", "lookup", env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.outputs.get("membership"), "lookup-failed")

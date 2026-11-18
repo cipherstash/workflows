@@ -1,13 +1,10 @@
 """The decide job's last step, which always leaves the fire job a finished decision and writes the run's summary."""
 
 import json
-import pathlib
 import re
-import shutil
-import tempfile
 import unittest
 
-from harness import ROOT, _yq, run_step, run_step_as_written, step_script
+from harness import _yq, run_step, run_step_as_written, step_file_copy, step_file_path, step_script
 
 FIRE = {
     "decision": "fire",
@@ -20,6 +17,7 @@ FIRE = {
 LOOKUP = {"decision": "lookup", "requester": "alice"}
 DECISION_FAILED = {"decision": "skip", "reason": "decision-failed"}
 NOT_FINISHED = "The request decision did not finish; no review was requested"
+REPORT = step_file_path("decide", "final")
 
 
 def compact(value):
@@ -115,7 +113,7 @@ class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
 
     def test_with_the_file_the_step_runs_it(self):
         result = run_step_as_written(
-            "decide", "final", {"STEP_FILE": str(ROOT / "steps" / "report.py"), "FIRST": compact(FIRE), "SECOND": ""}
+            "decide", "final", {"STEP_FILE": str(REPORT), "FIRST": compact(FIRE), "SECOND": ""}
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.outputs["decision"]), FIRE)
@@ -125,15 +123,12 @@ class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
 
 class GivenTheStepFileCannotRun(unittest.TestCase):
     """report.py imports helpers.py. If that module is missing or broken, the step must still leave the decision-failed
-    skip, an error and the summary line, as the old inline step did."""
+    skip, an error and the summary line, as it does when report.py itself is missing."""
 
     def run_with_helpers(self, helpers_source):
-        with tempfile.TemporaryDirectory() as temp:
-            shutil.copy(ROOT / "steps" / "report.py", temp)
-            if helpers_source is not None:
-                (pathlib.Path(temp) / "helpers.py").write_text(helpers_source, encoding="utf-8")
+        with step_file_copy("decide", "final", helpers_source) as step_file:
             return run_step_as_written(
-                "decide", "final", {"STEP_FILE": f"{temp}/report.py", "FIRST": compact(FIRE), "SECOND": ""}
+                "decide", "final", {"STEP_FILE": str(step_file), "FIRST": compact(FIRE), "SECOND": ""}
             )
 
     def assert_decision_failed(self, result):
@@ -151,7 +146,7 @@ class GivenTheStepFileCannotRun(unittest.TestCase):
 
 class GivenTheDecisionFailedSkipIsWrittenInSeveralPlaces(unittest.TestCase):
     def test_the_job_output_fallback_the_wrapper_and_the_report_agree(self):
-        failed = re.search(r"^FAILED = '(.*)'$", (ROOT / "steps" / "report.py").read_text(encoding="utf-8"), re.M)
+        failed = re.search(r"^FAILED = '(.*)'$", REPORT.read_text(encoding="utf-8"), re.M)
         if failed is None:
             self.fail("steps/report.py has no FAILED line")
         job_output = _yq(".jobs.decide.outputs.decision")
