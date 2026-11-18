@@ -2,9 +2,9 @@
 # member and, if it is, fires the Claude code-review routine trigger for that pull request.
 #
 # Called from a short caller workflow in each repository (see examples/claude-review.yml). A reusable workflow runs in
-# the calling repository, so everything it needs is in this file: the request decision's jq program is the decide job's
-# REQUEST_DECISION variable, and request-decision/test runs this same program against saved cases. The Python steps'
-# scripts are inline too, and the unit tests in tests/ read them out of this file and run them.
+# the calling repository, so the decide job checks out the request decision, request-decision/decision.jq, from this
+# repository at the commit the caller pinned, and request-decision/test runs that same file against saved cases. The
+# Python steps' scripts are inline, and the unit tests in tests/ read them out of this file and run them.
 #
 # Kinds of review request handled so far: Ready (a non-draft pull request opened or reopened, or a draft marked ready
 # for review). Drafts, bots' pull requests, forks and deleted forks are skipped, and so is a pull request whose author
@@ -51,63 +51,40 @@ jobs:
     outputs:
       decision: ${{ steps.final.outputs.decision }}
     env:
-      # The request decision. Input: {event_name, event, review_agent, membership}, where membership is null before a
-      # lookup, or "member", "not-member" or "lookup-failed" after one. Output, exactly one of:
-      #   {"decision": "skip", "reason": "<code>"}
-      #   {"decision": "lookup", "requester": "<login>"}
-      #   {"decision": "fire", "kind": "ready", "requester": "<login>", "pull_request": {"number": N, "url": "…"}, "text": "…"}
-      REQUEST_DECISION: |
-        def skip($reason): {decision: "skip", reason: $reason};
-
-        # Fires for a member, or asks for a lookup when membership is not known yet.
-        def gate($requester; $fire):
-          if .membership == null then {decision: "lookup", requester: $requester}
-          elif .membership == "member" then $fire
-          elif .membership == "not-member" then skip("not-a-team-member")
-          # "lookup-failed", or anything unexpected: membership is never assumed.
-          else skip("membership-lookup-failed")
-          end;
-
-        # GitHub logins are not case-sensitive.
-        def is_review_agent($login): ($login // "" | ascii_downcase) as $l | $l != "" and $l == (.review_agent // "" | ascii_downcase);
-
-        # Ready: a non-draft pull request opened or reopened, or a draft marked ready for review. The requester is the
-        # author. A pull request the review agent opened is reviewed without a lookup: the agent opens most pull
-        # requests, and they need review too.
-        def ready:
-          .event.pull_request as $pr
-          | .event.repository.full_name as $event_repo
-          | (
-              {
-                decision: "fire",
-                kind: "ready",
-                requester: $pr.user.login,
-                pull_request: {number: $pr.number, url: $pr.html_url}
-              }
-              # The text names the kind, from the decision's own kind field: the first line says which pull request to
-              # review, the second says why the review was requested.
-              | .text = "Review pull request #\($pr.number) in \($event_repo): \($pr.html_url)\n\nKind of review request: \(.kind)."
-            ) as $fire
-          # A payload with no author is not one this decision can act on: there is no one to look up or credit.
-          | if $pr.user == null then skip("not-a-review-request")
-            elif $pr.draft == true then skip("draft")
-            elif $pr.user.type == "Bot" then skip("bot")
-            elif $pr.head.repo == null or $pr.head.repo.full_name != $pr.base.repo.full_name then skip("fork")
-            elif is_review_agent($pr.user.login) then $fire
-            else gate($pr.user.login; $fire)
-            end;
-
-        if .event_name == "pull_request" and (.event.action | IN("opened", "reopened", "ready_for_review"))
-        then ready
-        else skip("not-a-review-request")
-        end
+      # The request decision's jq program, from this repository's checkout (the checkout step below).
+      REQUEST_DECISION: ${{ github.workspace }}/.cipherstash-workflows/request-decision/decision.jq
     steps:
+      # A reusable workflow runs in the calling repository, so the request decision is checked out from this repository
+      # at the commit the caller pinned: job.workflow_repository and job.workflow_sha name the reusable workflow, not
+      # the caller. Only the decision's file is checked out, into a directory no caller file uses, and no credentials
+      # are kept. The step is skipped if either value is empty, so it never falls back to the caller's repository and
+      # the pull request's own code.
+      - name: Check out the request decision
+        id: checkout
+        if: job.workflow_repository != '' && job.workflow_sha != ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .cipherstash-workflows
+          sparse-checkout: /request-decision/decision.jq
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Decide (before any membership lookup)
         id: first
         continue-on-error: true
         env:
           REVIEW_AGENT: ${{ inputs.review-agent }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
         run: |
+          # Without the checked-out decision there is nothing to run: this step fails, and the decision-failed skip
+          # stands.
+          if [[ "$CHECKOUT_OUTCOME" != success || ! -f "$REQUEST_DECISION" ]]; then
+            echo "::error::Could not check out the request decision from the workflows repository; no review was requested"
+            exit 1
+          fi
           request="$RUNNER_TEMP/request.json"
           jq --null-input --compact-output \
             --arg event_name "$GITHUB_EVENT_NAME" \
@@ -120,7 +97,7 @@ jobs:
             delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
             printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
           }
-          decision="$(jq --compact-output "$REQUEST_DECISION" "$request")"
+          decision="$(jq --compact-output --from-file "$REQUEST_DECISION" "$request")"
           requester="$(jq --raw-output '.requester // ""' <<<"$decision")"
           if [[ "$(jq --raw-output '.decision' <<<"$decision")" == lookup ]]; then
             needs_lookup=true
@@ -332,7 +309,7 @@ jobs:
             printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
           }
           decision="$(jq --compact-output --arg membership "$MEMBERSHIP" '.membership = $membership' "$RUNNER_TEMP/request.json" \
-            | jq --compact-output "$REQUEST_DECISION")"
+            | jq --compact-output --from-file "$REQUEST_DECISION")"
           output decision "$decision"
 
       - name: Report the decision
