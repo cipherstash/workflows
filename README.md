@@ -116,6 +116,7 @@ A run has up to three jobs:
 
 - `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. A line break in a reason is flattened to a space, so a reason cannot start a workflow command. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
 - `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
+  If the job could not check out its step file, nothing is sent, and the run shows an error, but the check stays green.
 - `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, never for Ready or a requested reviewer, and only once `fire` has sent the request. It sends the reaction once, with no retry, and does not follow a redirect. HTTP `201` (added) or `200` (already there) counts as reacted. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
 
 `decide` and `fire` hold no permissions.
@@ -194,17 +195,23 @@ The code for these steps is in the `steps/` directory:
 | --- | --- |
 | `steps/lookup.py` | The membership lookup, in the `decide` job. |
 | `steps/report.py` | The last step of the `decide` job. It passes on the decision, or the `decision-failed` skip, and writes the summary line. |
+| `steps/fire.py` | The request to the routine trigger, in the `fire` job. |
 | `steps/helpers.py` | Code every step shares: the time limits, the redirect blocker, annotations, step outputs and hiding a token. |
 
 The `decide` job checks out `steps/` with the request decision, as described above.
+The `fire` job checks out `steps/` in the same way, because a job cannot see another job's files.
 Each step names its file in its `env` as `STEP_FILE`, and runs it with the runner's `python3`.
 If the report's file was not checked out, the step still writes the `decision-failed` skip, an error and the summary line by itself.
+If the routine call's file was not checked out, the step sends nothing and shows an error.
 
-The request to the routine trigger and the 👀 reaction are still written inline in the reusable workflow, with `shell: python3 {0}` and an `id`.
-Issues #24 and #25 move the inline steps into files.
+The routine API's address is fixed in `steps/fire.py`, so no input or event can change where the token goes.
+Only the unit tests replace it, with a stand-in server's address.
+
+The 👀 reaction is still written inline in the reusable workflow, with `shell: python3 {0}` and an `id`.
+Issue #25 moves it into a file.
 
 The workflows repository must stay public. A caller's built-in token reads the request decision and the step files from it, so if it became private, every run would end as decision-failed with an error.
-The unit tests in `tests/` run the same step files, and read each inline step's script out of the workflow, so they test exactly what ships.
+The unit tests in `tests/` run the same step files, and read the reaction's script out of the workflow, so they test exactly what ships.
 
 ## Checks
 
@@ -252,10 +259,11 @@ python3 -m unittest discover --start-directory tests
 2. Run the unit tests and check the new test passes.
 
 An inline step cannot import `steps/helpers.py`, so it keeps its own copy of the shared code: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener` and `escaped`, and `error`, `warning` and `output` in each step that has them.
-`tests/test_python_steps.py` checks that every copy is identical to `steps/helpers.py`, so a change to the module must be made to every copy too.
-The check goes when the last inline step moves into a file.
+The only inline step left is the 👀 reaction.
+`tests/test_python_steps.py` lists the inline steps and checks that every copy in them is identical to `steps/helpers.py`, so a change to the module must be made to every copy too.
+A new inline step fails the tests until it is added to that list.
 
-`tests/test_decision_file.py` checks that each file the workflow runs from its checkout exists in this repository and is included in the checkout, so a renamed file fails the tests rather than every run.
+`tests/test_decision_file.py` checks that each file the workflow runs from its checkout exists in this repository and is included in the checkout of its own job, and that the `decide` and `fire` jobs check out this repository in the same way. So a renamed file fails the tests rather than every run.
 
 ### Security checks
 

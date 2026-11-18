@@ -1,6 +1,7 @@
 """Every Python step in the reusable workflow: the rules that hold for all of them."""
 
 import ast
+import sys
 import unittest
 
 from harness import STEPS_DIR, file_steps, python_steps, python_steps_without_id, step_script
@@ -8,13 +9,17 @@ from harness import STEPS_DIR, file_steps, python_steps, python_steps_without_id
 # The shared helper module the step files import, and the one copy of the scaffolding that the inline steps must match.
 HELPERS = STEPS_DIR / "helpers.py"
 
+# The Python steps still inline in the workflow, as (job, step id). Only the reaction is left, until issue #25 moves it
+# into a file. A new inline step must be added here, and so is checked against the helper module below.
+INLINE_STEPS = {("react", "reaction")}
+
 
 class PythonStepsTest(unittest.TestCase):
-    def test_the_workflow_has_python_steps(self):
-        self.assertLessEqual({("fire", "send"), ("react", "reaction")}, set(python_steps()))
+    def test_the_inline_python_steps_are_the_listed_ones(self):
+        self.assertEqual(set(python_steps()), INLINE_STEPS)
 
-    def test_the_lookup_and_the_report_run_from_files(self):
-        self.assertLessEqual({("decide", "lookup"), ("decide", "final")}, set(file_steps()))
+    def test_the_lookup_the_report_and_the_routine_call_run_from_files(self):
+        self.assertLessEqual({("decide", "lookup"), ("decide", "final"), ("fire", "send")}, set(file_steps()))
 
     def test_each_python_step_has_an_id_so_it_is_listed_and_checked(self):
         self.assertEqual(python_steps_without_id(), [])
@@ -30,10 +35,19 @@ class PythonStepsTest(unittest.TestCase):
             with self.subTest(file=path.name):
                 ast.parse(path.read_text(encoding="utf-8"), filename=str(path), feature_version=(3, 10))
 
+    def test_steps_is_flat(self):
+        # The harness and the checkout test list steps/*.py only, so a subdirectory with Python in it would go untested.
+        self.assertEqual(sorted(p.as_posix() for p in STEPS_DIR.rglob("*.py") if p.parent != STEPS_DIR), [])
+
+    def test_no_step_module_is_named_like_a_standard_library_module(self):
+        # steps/ is first on sys.path when a step runs, so a module named like a standard library one would replace it.
+        self.assertEqual(sorted(p.stem for p in STEPS_DIR.glob("*.py") if p.stem in sys.stdlib_module_names), [])
+
 
 # Scaffolding that a step still inline in the workflow defines as its own copy, because an inline script cannot import
 # the shared helper module. Each copy must be identical to the module's definition, so that a hardening fix made in the
-# module is not missed in a copy. Issues #24 and #25 move the last inline steps into files, and this check with them.
+# module is not missed in a copy. While INLINE_STEPS is empty these checks find no copies, and they stay to catch a new
+# inline step.
 
 
 # Scaffolding every inline step that makes a request defines.
@@ -89,7 +103,6 @@ class SharedScaffoldingTest(unittest.TestCase):
 
     def test_each_inline_step_that_makes_requests_defines_all_the_request_scaffolding(self):
         requesting = [step for step, script in self.steps.items() if makes_requests(script)]
-        self.assertLessEqual({"fire.send", "react.reaction"}, set(requesting))
         for step in requesting:
             with self.subTest(step=step):
                 missing = set(REQUEST_SCAFFOLDING) - set(top_level_definitions(self.steps[step]))
