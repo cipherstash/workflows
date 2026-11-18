@@ -1,9 +1,13 @@
 """The decide job's last step, which always leaves the fire job a finished decision and writes the run's summary."""
 
 import json
+import pathlib
+import re
+import shutil
+import tempfile
 import unittest
 
-from harness import ROOT, run_step, run_step_as_written
+from harness import ROOT, WORKFLOW, _yq, run_step, run_step_as_written, step_script
 
 FIRE = {
     "decision": "fire",
@@ -117,6 +121,44 @@ class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
         self.assertEqual(json.loads(result.outputs["decision"]), FIRE)
         self.assertEqual(result.errors(), [])
         self.assertEqual(result.summary, "Claude review: requested (ready, by @alice, pull request #7)\n")
+
+
+class GivenTheStepFileCannotRun(unittest.TestCase):
+    """report.py imports helpers.py. If that module is missing or broken, the step must still leave the decision-failed
+    skip, an error and the summary line, as the old inline step did."""
+
+    def run_with_helpers(self, helpers_source):
+        with tempfile.TemporaryDirectory() as temp:
+            shutil.copy(ROOT / "steps" / "report.py", temp)
+            if helpers_source is not None:
+                (pathlib.Path(temp) / "helpers.py").write_text(helpers_source, encoding="utf-8")
+            return run_step_as_written(
+                "decide", "final", {"STEP_FILE": f"{temp}/report.py", "FIRST": compact(FIRE), "SECOND": ""}
+            )
+
+    def assert_decision_failed(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.outputs["decision"]), DECISION_FAILED)
+        self.assertIn(NOT_FINISHED, result.errors())
+        self.assertEqual(result.summary, "Claude review: skipped (decision-failed)\n")
+
+    def test_missing_helpers_leave_the_decision_failed_skip(self):
+        self.assert_decision_failed(self.run_with_helpers(None))
+
+    def test_broken_helpers_leave_the_decision_failed_skip(self):
+        self.assert_decision_failed(self.run_with_helpers("def broken(:\n"))
+
+
+class GivenTheDecisionFailedSkipIsWrittenInSeveralPlaces(unittest.TestCase):
+    def test_the_job_output_fallback_the_wrapper_and_the_report_agree(self):
+        failed = re.search(r"^FAILED = '(.*)'$", (ROOT / "steps" / "report.py").read_text(encoding="utf-8"), re.M)
+        self.assertIsNotNone(failed)
+        job_output = _yq(".jobs.decide.outputs.decision")
+        fallback = re.search(r"\|\| '(.*)' \}\}", job_output)
+        self.assertIsNotNone(fallback, job_output)
+        self.assertEqual(fallback.group(1), failed.group(1))
+        script, _ = step_script("decide", "final")
+        self.assertIn(f"echo 'decision={failed.group(1)}' >>\"$GITHUB_OUTPUT\"", script)
 
 
 if __name__ == "__main__":
