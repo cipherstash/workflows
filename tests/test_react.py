@@ -237,6 +237,27 @@ class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
         result = self.run_with_helpers("def broken(:\n")
         self.assertIn("the shared helper module could not be loaded", result.warnings()[0])
 
+    def run_checked_out(self, status):
+        env = inputs(STEP_FILE=str(ROOT / "steps" / "react.py"), CHECKOUT_OUTCOME="success")
+        with StubServer({REACTIONS_PATH: (status, "{}")}) as stub:
+            result = run_step_as_written("react", "reaction", env, api_url=stub.url, repository=REPOSITORY)
+        self.assertEqual(len(stub.requests), 1)
+        self.assertEqual(result.errors(), [])
+        return result
+
+    def test_a_reaction_added_through_the_script_exits_zero_without_a_warning(self):
+        # Without `exec`, a successful file would fall through to the not-checked-out warning and exit 1.
+        result = self.run_checked_out(201)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.warnings(), [])
+
+    def test_a_refused_reaction_through_the_script_is_the_files_own_warning(self):
+        result = self.run_checked_out(403)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(result.warnings()), 1, result.stdout)
+        self.assertIn("HTTP 403", result.warnings()[0])
+        self.assertNotEqual(result.warnings(), [NOT_CHECKED_OUT])
+
     def test_a_failed_step_does_not_turn_the_check_red(self):
         query = '.jobs.react.steps[] | select(.id == "reaction") | ."continue-on-error"'
         self.assertEqual(_yq(query).strip(), "true")

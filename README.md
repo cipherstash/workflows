@@ -118,7 +118,7 @@ A run has up to three jobs:
 - `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
   If the job could not check out its step file, nothing is sent, and the run shows an error, but the check stays green.
 - `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, never for Ready or a requested reviewer, and only once `fire` has sent the request. It sends the reaction once, with no retry, and does not follow a redirect. HTTP `201` (added) or `200` (already there) counts as reacted. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
-  If the job could not check out its step file, no reaction is added, and the run shows a warning, but the check stays green.
+  If the job could not check out its step file, no reaction is added, and the run shows a warning, but the check stays green. A failed checkout also prints its own error annotation, which is not a red check.
 
 `decide` and `fire` hold no permissions.
 `react` holds only `issues: write`, which GitHub documents as the permission for adding a reaction to an issue or pull request comment.
@@ -209,7 +209,7 @@ If the routine call's file was not checked out, the step sends nothing and shows
 If the reaction's file or the helper module was not checked out, or the helper module cannot be loaded, the step adds no reaction and shows a warning.
 
 The `react` job holds only `issues: write`, and no `contents` permission, yet its checkout reads this repository with the job's token.
-That works because this repository is public, as it does for the `decide` and `fire` jobs, which hold no permissions at all.
+This relies on this repository being public, as for the `decide` and `fire` jobs, which hold no permissions at all; it is to be confirmed by the first live run (#20).
 
 The routine API's address is fixed in `steps/fire.py`, so no input or event can change where the token goes.
 Only the unit tests replace it, with a stand-in server's address.
@@ -275,7 +275,7 @@ No Python code is read out of the workflow.
 
 To add a new Python step:
 
-1. Write it as a file in `steps/`, importing what it needs from `steps/helpers.py`. Give it a name that is not a standard library module's, such as `notify.py` rather than `email.py`: a test checks this. Give every function type hints, and add the module to the list of step files in `pyproject.toml` (see [Linting and type checking](#linting-and-type-checking)).
+1. Write it as a file in `steps/`, importing what it needs from `steps/helpers.py`. Give it a name that is not a standard library module's, such as `notify.py` rather than `email.py`: a test checks this. Give every function type hints, add the module to the list of step files in `pyproject.toml` (see [Linting and type checking](#linting-and-type-checking)), and add the step to the exact set asserted in `tests/test_python_steps.py` (`test_the_lookup_the_report_the_routine_call_and_the_reaction_run_from_files`).
 2. In the workflow, give the step an `id`, its file as `STEP_FILE` in its `env`, and a `bash` script that runs the file, or does something safe if the file is missing. If its job has no checkout of this repository yet, copy the `checkout` step from the `fire` job to the start of the job.
 3. Add `tests/test_<step>.py`, running the file with `run_step`, and the `bash` script with `run_step_as_written`.
 
