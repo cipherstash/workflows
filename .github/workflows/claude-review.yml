@@ -41,7 +41,8 @@ permissions: {}
 jobs:
   # Decides whether the event is a review request to send on. Untrusted text (titles, branch names, logins) is read
   # from the event payload file or passed through environment variables, never placed in a script by an expression.
-  # Every failure here ends as a skip with an error annotation; the job itself stays green.
+  # Every failure here ends as a skip with an error annotation; the job itself stays green, because every step that
+  # can fail has continue-on-error.
   decide:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -110,13 +111,26 @@ jobs:
             --arg review_agent "$REVIEW_AGENT" \
             --slurpfile event "$GITHUB_EVENT_PATH" \
             '{event_name: $event_name, event: $event[0], review_agent: $review_agent, membership: null}' >"$request"
+          # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
+          output() {
+            local delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
+            printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
+          }
           decision="$(jq --compact-output "$REQUEST_DECISION" "$request")"
-          echo "decision=$decision" >>"$GITHUB_OUTPUT"
-          echo "requester=$(jq --raw-output '.requester // ""' <<<"$decision")" >>"$GITHUB_OUTPUT"
+          requester="$(jq --raw-output '.requester // ""' <<<"$decision")"
+          if [[ "$(jq --raw-output '.decision' <<<"$decision")" == lookup ]]; then
+            needs_lookup=true
+          else
+            needs_lookup=false
+          fi
+          output decision "$decision"
+          output requester "$requester"
+          # The later steps test this one output, not the decision's text.
+          output needs-lookup "$needs_lookup"
 
       - name: Create the membership App's token
         id: app-token
-        if: steps.first.outcome == 'success' && fromJSON(steps.first.outputs.decision).decision == 'lookup'
+        if: steps.first.outputs.needs-lookup == 'true'
         # A failed token is reported by the next step and skips the request.
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -128,7 +142,7 @@ jobs:
 
       - name: Look up team membership
         id: lookup
-        if: steps.first.outcome == 'success' && fromJSON(steps.first.outputs.decision).decision == 'lookup'
+        if: steps.first.outputs.needs-lookup == 'true'
         continue-on-error: true
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -138,7 +152,14 @@ jobs:
           REQUESTER: ${{ steps.first.outputs.requester }}
         run: |
           # Membership is never assumed: anything but a clear answer from GitHub is "lookup-failed", which skips.
+          # Names go into the URL, so each must start with a letter, digit or (for a team) underscore, which keeps "."
+          # and ".." out. A login is letters and digits joined by single hyphens (or underscores, for managed users).
           membership=lookup-failed
+          # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
+          output() {
+            local delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
+            printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
+          }
           api() {
             # The token goes in on standard input, never on curl's command line.
             curl --silent --show-error --connect-timeout 10 --max-time 30 \
@@ -150,7 +171,7 @@ jobs:
           }
           if [[ "$TOKEN_OUTCOME" != success || -z "$APP_TOKEN" ]]; then
             echo "::error::Could not create the membership App's token: check the CLAUDE_REVIEW_APP_ID and CLAUDE_REVIEW_APP_PRIVATE_KEY secrets, and that the App is installed on $ORG with Members: read"
-          elif ! [[ "$ORG" =~ ^[A-Za-z0-9-]+$ && "$TEAM" =~ ^[A-Za-z0-9_.-]+$ && "$REQUESTER" =~ ^[A-Za-z0-9-]+$ ]]; then
+          elif ! [[ "$ORG" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ && "$TEAM" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ && "$REQUESTER" =~ ^[A-Za-z0-9]+([-_][A-Za-z0-9]+)*$ ]]; then
             echo "::error::Cannot look up team membership: the organisation, team or requester is not a valid GitHub name"
           else
             status="$(api "orgs/$ORG/teams/$TEAM/memberships/$REQUESTER")"
@@ -177,35 +198,51 @@ jobs:
                 ;;
             esac
           fi
-          echo "membership=$membership" >>"$GITHUB_OUTPUT"
+          output membership "$membership"
 
       - name: Decide (with the membership lookup's result)
         id: second
-        if: steps.first.outcome == 'success' && fromJSON(steps.first.outputs.decision).decision == 'lookup'
+        if: steps.first.outputs.needs-lookup == 'true'
         continue-on-error: true
         env:
           MEMBERSHIP: ${{ steps.lookup.outputs.membership || 'lookup-failed' }}
         run: |
+          # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
+          output() {
+            local delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
+            printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
+          }
           decision="$(jq --compact-output --arg membership "$MEMBERSHIP" '.membership = $membership' "$RUNNER_TEMP/request.json" \
             | jq --compact-output "$REQUEST_DECISION")"
-          echo "decision=$decision" >>"$GITHUB_OUTPUT"
+          output decision "$decision"
 
       - name: Report the decision
         id: final
         if: always()
+        # This step must not fail, because the fire job reads its output. It writes the "decision-failed" skip first, so
+        # that if anything below breaks, that skip is what the fire job sees; the valid decision then replaces it.
+        continue-on-error: true
         env:
           FIRST: ${{ steps.first.outputs.decision }}
           SECOND: ${{ steps.second.outputs.decision }}
         run: |
+          # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
+          output() {
+            local delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
+            printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
+          }
+          failed='{"decision":"skip","reason":"decision-failed"}'
+          output decision "$failed"
           decision="${SECOND:-$FIRST}"
-          if [[ -z "$decision" ]] || [[ "$(jq --raw-output '.decision' <<<"$decision")" == lookup ]]; then
+          # Only a finished decision, a skip or a fire, is passed on.
+          if ! jq --exit-status '.decision == "skip" or .decision == "fire"' <<<"$decision" >/dev/null 2>&1; then
             echo "::error::The request decision did not finish; no review was requested"
-            decision='{"decision":"skip","reason":"decision-failed"}'
+            decision="$failed"
           fi
           if [[ "$(jq --raw-output '.reason // ""' <<<"$decision")" == membership-lookup-failed ]]; then
             echo "::error::Team membership could not be checked, so no review was requested"
           fi
-          echo "decision=$decision" >>"$GITHUB_OUTPUT"
+          output decision "$decision"
           jq --raw-output '
             if .decision == "fire"
             then "Claude review: requested (\(.kind), by @\(.requester), pull request #\(.pull_request.number))"
