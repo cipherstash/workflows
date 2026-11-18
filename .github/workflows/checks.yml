@@ -1,6 +1,6 @@
-# Checks every pull request to this repository, and every push to main: lints the workflows and the example callers,
-# checks the request decision's test script, runs the request decision's saved cases, and runs the unit tests of the
-# reusable workflow's Python steps.
+# Checks every pull request to this repository, and every push to main: lints and audits the workflows and the example
+# callers, checks the request decision's test script, runs the request decision's saved
+# cases, and runs the unit tests of the reusable workflow's Python steps.
 name: Checks
 
 on:
@@ -24,6 +24,36 @@ jobs:
       # which are not under .github/workflows, are linted too.
       - name: actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color .github/workflows/*.yml examples/*.yml
+
+  # Audits the workflows, the example callers and the Dependabot configuration for security problems. Fails on any
+  # finding, of any severity, with zizmor's default ("regular") persona. A finding is either fixed or accepted with
+  # an inline `# zizmor: ignore[<audit>] <reason>` comment on the line zizmor reports. Findings show as annotations
+  # on the pull request.
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Pinned by version with hashes, in .github/zizmor/requirements.txt. Installed into its own virtual environment
+      # because the runner's Python does not allow installing packages into it.
+      - name: Install zizmor
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zizmor"
+          "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --no-deps --only-binary :all: --require-hashes \
+            --requirement .github/zizmor/requirements.txt
+      # The repository root gives zizmor .github/workflows/ and .github/dependabot.yml. The example callers are not
+      # under .github/workflows/, so each is named explicitly, if there are any. The token lets zizmor's online
+      # audits check that each pinned commit belongs to its action's repository and has no known vulnerability.
+      - name: Audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          "$RUNNER_TEMP/zizmor/bin/zizmor" --persona=regular --format=github . examples/*.yml
 
   request-decision:
     runs-on: ubuntu-latest
