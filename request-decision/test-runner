@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Checks that request-decision/test reports broken or missing cases as failures instead of passing or stopping early.
 #
-# Each check copies the decision and its test script into a temporary directory, sets up the cases for that check,
-# runs the test script, and compares its exit status and output with what is expected.
+# Each check copies the test script into a temporary directory beside a stand-in decision that echoes its input, sets
+# up the cases for that check, runs the test script, and compares its exit status and output with what is expected.
+# The stand-in keeps these checks about the test script alone, whatever the real decision does.
 #
 # Exits non-zero if any check fails. Needs only bash and jq.
 set -euo pipefail
@@ -12,11 +13,13 @@ trap 'rm -rf -- "$work"' EXIT
 
 failed=0
 
-# Makes a fresh copy of the scripts with an empty cases directory and prints its path.
+# Makes a fresh copy of the test script, with the stand-in decision and an empty cases directory, and prints its path.
 new_copy() {
   local dir
   dir="$(mktemp -d "$work/copy.XXXXXX")"
-  cp "$here/test" "$here/decide" "$here/decide.jq" "$dir/"
+  cp "$here/test" "$dir/"
+  printf '#!/usr/bin/env bash\nexec jq --compact-output .\n' >"$dir/decide"
+  chmod +x "$dir/decide"
   mkdir "$dir/cases"
   echo "$dir"
 }
