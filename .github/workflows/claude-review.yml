@@ -254,8 +254,8 @@ jobs:
   # This is the only job that holds a write permission, and it sees only the decision. Reacting to a pull request's
   # conversation comment uses the issue-comment reactions endpoint, which GitHub documents as needing "Issues: write".
   # The calling job must grant `issues: write`, because a reusable workflow's jobs cannot hold more than their caller.
-  # The checkout needs no contents permission: it reads this repository, which is public, as the decide and fire jobs
-  # do with no permissions at all.
+  # The checkout is given no contents permission. This relies on this repository being public, as for the decide and
+  # fire jobs, which hold no permissions at all; it is to be confirmed by the first live run (#20).
   react:
     needs: [decide, fire]
     if: needs.fire.outputs.sent == 'true' && fromJSON(needs.decide.outputs.decision).react == true

@@ -120,6 +120,7 @@ class CheckoutStepsTest(unittest.TestCase):
                 self.assertEqual(_yq(query + '.with."persist-credentials"').strip(), "false")
                 self.assertEqual(_yq(query + '.with."sparse-checkout-cone-mode"').strip(), "false")
 
+
 class NoReactionWithoutASentRequestTest(unittest.TestCase):
     """The react job runs only once the fire job's send step said sent. If the fire job's checkout failed, its step
     sends nothing and writes no sent output, so the comment gets no reaction."""
