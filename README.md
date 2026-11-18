@@ -199,8 +199,8 @@ Every Python step runs from a file in `steps/`, so none keeps its own copy of th
 Both check every Python file in this repository, as written for Python 3.10, and the check fails on any finding.
 Their settings are in `pyproject.toml`, which holds nothing else: this repository is not a Python package.
 
-The files in `steps/` must have type hints on every function, so that mypy checks every call between them.
-A new step file must be added to the list of step files in `pyproject.toml`.
+mypy is strict by default: every function in a new Python file, such as a new step file, must have type hints, so that mypy checks every call between them.
+Only the test files and their harness are exempt, and `pyproject.toml` names them. A new test file fails mypy until it is added there.
 In `tests/`, mypy checks the code inside each function, with or without type hints.
 
 Fix a finding where you can.
