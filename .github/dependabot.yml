@@ -1,0 +1,12 @@
+# Keeps the actions this repository's workflows use up to date. When Dependabot bumps an action's pin, it also
+# regenerates that action's entry in the workflow lockfile, .github/workflows/actions.lock, in the same pull request.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Waits 7 days after a release before proposing it, so a bad or compromised release has time to be found and
+    # pulled first. Only default-days applies to GitHub Actions. Security updates are not delayed.
+    cooldown:
+      default-days: 7
