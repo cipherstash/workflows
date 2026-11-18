@@ -38,7 +38,9 @@ WORKFLOW_FILES_PREFIX = "${{ env.WORKFLOW_FILES }}/"
 PYTHON_SHELL = "python3 {0}"
 
 
+@functools.cache
 def _yq(query):
+    """yq's raw output for query over the workflow, which the tests only read, so each query runs once."""
     result = subprocess.run(["yq", "-r", query, str(WORKFLOW)], capture_output=True, text=True, check=True)
     return result.stdout
 
@@ -360,7 +362,7 @@ class StubServer:
         self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._server.daemon_threads = True
         self.url = f"http://127.0.0.1:{self._server.server_address[1]}"
-        self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.005}, daemon=True)
 
     def __enter__(self):
         self._thread.start()
