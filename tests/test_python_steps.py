@@ -41,8 +41,8 @@ class PythonStepsTest(unittest.TestCase):
         # missing from that list, so a new untyped step would pass CI. tomllib is not in Python 3.10, hence the regex.
         text = (STEPS_DIR.parent / "pyproject.toml").read_text(encoding="utf-8")
         listed = re.search(r"^module\s*=\s*\[([^\]]*)\]", text, re.MULTILINE)
-        self.assertIsNotNone(listed, "pyproject.toml has no `module = [...]` mypy override")
-        assert listed is not None
+        if listed is None:
+            self.fail("pyproject.toml has no `module = [...]` mypy override")
         self.assertEqual(set(re.findall(r'"([^"]+)"', listed.group(1))), {p.stem for p in STEPS_DIR.glob("*.py")})
 
     def test_steps_is_flat(self):
