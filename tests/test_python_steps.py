@@ -37,7 +37,7 @@ REQUEST_SCAFFOLDING = (
     "total_time_limit",
 )
 # Scaffolding any step may define; every copy of it must be identical.
-SHARED_SCAFFOLDING = REQUEST_SCAFFOLDING + ("output",)
+SHARED_SCAFFOLDING = REQUEST_SCAFFOLDING + ("error", "output")
 
 
 def top_level_definitions(script):

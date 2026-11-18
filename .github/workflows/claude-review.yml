@@ -720,7 +720,7 @@ jobs:
 
           # Seconds to wait to connect, and then for each read of the answer.
           TIMEOUT_SECONDS = 10
-          # Seconds the whole request may take, however slowly the answer arrives.
+          # Seconds one request may take in all, however slowly the answer arrives.
           TOTAL_SECONDS = 30
 
           # The id goes into the URL, so anything but ASCII digits is refused.
@@ -750,7 +750,8 @@ jobs:
                   return None
 
 
-          # Proxy settings in the environment are honoured, as curl honoured them before.
+          # urllib.request reads the proxy settings of the environment (http_proxy, https_proxy and no_proxy, in either
+          # case) by default, but not ALL_PROXY.
           opener = urllib.request.build_opener(NoRedirects)
 
 
@@ -800,24 +801,30 @@ jobs:
                       "Content-Type": "application/json",
                   },
               )
-              signal.signal(signal.SIGALRM, on_total_timeout)
-              signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
+              status = None
               try:
-                  try:
-                      with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-                          return response.status
-                  except urllib.error.HTTPError as answer:
-                      return answer.code
+                  with total_time_limit():
+                      try:
+                          with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                              # The status is the whole answer: the time limit ends as soon as it is known, and the
+                              # body is not read, so nothing after this can turn a 201 into a warning.
+                              status = response.status
+                              signal.setitimer(signal.ITIMER_REAL, 0)
+                      except urllib.error.HTTPError as answer:
+                          status = answer.code
+                          signal.setitimer(signal.ITIMER_REAL, 0)
+                          answer.close()
               except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
-                  # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
-                  # reported.
-                  reason = getattr(failure, "reason", failure)
-                  raise NotReacted(
-                      f"Could not reach GitHub to add the 👀 reaction ({type(reason).__name__}); the review was still "
-                      "requested"
-                  )
-              finally:
-                  signal.setitimer(signal.ITIMER_REAL, 0)
+                  if status is None:
+                      # URLError, timeouts, refused or dropped connections, an answer cut off before its status. Only
+                      # the failure's kind is reported.
+                      reason = getattr(failure, "reason", failure)
+                      raise NotReacted(
+                          f"Could not reach GitHub to add the 👀 reaction ({type(reason).__name__}); the review was "
+                          "still requested"
+                      )
+                  # The status arrived; only closing the answer failed, so the status stands.
+              return status
 
 
           def react(token, decision):

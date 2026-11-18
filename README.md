@@ -204,5 +204,5 @@ python3 -m unittest discover --start-directory tests
 1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
 2. Run the unit tests and check the new test passes.
 
-The Python steps are inline scripts and cannot share a module, so each step that makes a request keeps its own copy of the shared scaffolding: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener`, `escaped` and `output`.
+The Python steps are inline scripts and cannot share a module, so each step that makes a request keeps its own copy of the shared scaffolding: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener` and `escaped`, and `error` and `output` in each step that has them.
 `tests/test_python_steps.py` checks that every copy is identical, so a change to one copy must be made to all of them.

@@ -1,6 +1,7 @@
 """The react job's reaction step: how each answer GitHub can give becomes a 👀 reaction, or a warning."""
 
 import json
+import time
 import unittest
 
 from harness import StubServer, closed_port_url, run_step
@@ -69,6 +70,16 @@ class GivenGitHubAddsTheReaction(ReactTest):
         result = self.react({REACTIONS_PATH: (200, json.dumps({"id": 1, "content": "eyes"}))})
         self.assert_reacted(result)
 
+    def test_a_reaction_whose_answer_never_ends_is_success(self):
+        # The status says the reaction is there, so the step does not wait for the rest of the answer.
+        for status in (200, 201):
+            with self.subTest(status=status):
+                started = time.monotonic()
+                result = self.react({REACTIONS_PATH: StubServer.drip(status)},
+                                    substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
+                self.assert_reacted(result)
+                self.assertLess(time.monotonic() - started, 5, "the step waited for the answer's body")
+
     def test_the_request_is_one_post_of_eyes_with_the_github_headers(self):
         self.react({REACTIONS_PATH: (201, "{}")})
         self.assertEqual(len(self.stub.requests), 1)
@@ -90,9 +101,22 @@ class GivenGitHubRefusesTheReaction(ReactTest):
                 self.assertIn("the review was still requested", result.warnings()[0])
 
     def test_a_redirect_is_not_followed_and_is_a_warning(self):
-        result = self.react({REACTIONS_PATH: (302, "")})
-        self.assert_warned(result, "HTTP 302")
-        self.assertEqual(self.stub.paths(), [REACTIONS_PATH])
+        for status in (301, 302, 303, 307, 308):
+            with self.subTest(status=status):
+                # The redirect points at a second server that would add the reaction, so following it would show.
+                with StubServer({"/elsewhere": (201, "{}")}) as elsewhere:
+                    result = self.react({REACTIONS_PATH: (status, "", {"Location": f"{elsewhere.url}/elsewhere"})})
+                self.assert_warned(result, f"HTTP {status}")
+                self.assertEqual(self.stub.paths(), [REACTIONS_PATH])
+                self.assertEqual(elsewhere.requests, [], "the redirect was followed")
+                self.assertFalse(any(headers.get("Authorization") for _, _, headers in elsewhere.requests))
+
+    def test_an_error_answer_whose_body_never_ends_is_a_warning_with_its_status(self):
+        started = time.monotonic()
+        result = self.react({REACTIONS_PATH: StubServer.drip(403)},
+                            substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
+        self.assert_warned(result, "HTTP 403")
+        self.assertLess(time.monotonic() - started, 5, "the step waited for the answer's body")
 
 
 class GivenGitHubCannotBeReached(ReactTest):
