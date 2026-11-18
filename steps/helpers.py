@@ -12,6 +12,9 @@ import os
 import signal
 import urllib.request
 import uuid
+from collections.abc import Iterator
+from types import FrameType
+from typing import Any, NoReturn
 
 # Seconds to wait to connect, and then for each read of the answer.
 TIMEOUT_SECONDS = 10
@@ -23,34 +26,34 @@ class TotalTimeout(Exception):
     """One request took longer than TOTAL_SECONDS."""
 
 
-def escaped(message):
+def escaped(message: str) -> str:
     """message escaped as GitHub's workflow commands require, so no value can end an annotation or start another."""
     return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def error(message):
+def error(message: str) -> None:
     print(f"::error::{escaped(message)}", flush=True)
 
 
-def warning(message):
+def warning(message: str) -> None:
     print(f"::warning::{escaped(message)}", flush=True)
 
 
-def output(name, value):
+def output(name: str, value: str) -> None:
     # A random delimiter makes any value safe, even one with a newline in it.
     delimiter = f"ghadelim_{uuid.uuid4()}"
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as file:
         file.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
 
 
-def redacted(text, token):
+def redacted(text: str, token: str) -> str:
     """text with every copy of token taken out, in case an answer repeats the token it was sent."""
     return text.replace(token, "[token]") if token else text
 
 
 class NoRedirects(urllib.request.HTTPRedirectHandler):
     # A redirect is an answer to report, not to follow: following it could send the token somewhere else.
-    def redirect_request(self, *args, **kwargs):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
         return None
 
 
@@ -59,12 +62,12 @@ class NoRedirects(urllib.request.HTTPRedirectHandler):
 opener = urllib.request.build_opener(NoRedirects)
 
 
-def on_total_timeout(signum, frame):
+def on_total_timeout(signum: int, frame: FrameType | None) -> NoReturn:
     raise TotalTimeout()
 
 
 @contextlib.contextmanager
-def total_time_limit():
+def total_time_limit() -> Iterator[None]:
     """Raises TotalTimeout inside the block once TOTAL_SECONDS have passed. The block can end the limit early with
     signal.setitimer(signal.ITIMER_REAL, 0). Leaving the block ends the limit and puts the previous SIGALRM handler
     back, even if the alarm comes while that happens."""
