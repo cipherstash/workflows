@@ -11,7 +11,8 @@
 #     opened by the review agent is reviewed without a membership lookup.
 #   Comment command: a team member's new pull request comment whose first line is `@<review agent> review`, on drafts
 #     and forks too. The rest of the comment is passed on as instructions, and the comment gets a 👀 reaction once the
-#     request is sent. Comments by bots and by the review agent are skipped without a lookup.
+#     request is sent. Comments by bots and by the review agent are skipped without a lookup, and so are commands on
+#     closed or merged pull requests.
 name: Claude review
 
 on:
@@ -155,6 +156,9 @@ jobs:
             ) as $fire
           | if .event.action != "created" or $issue.pull_request == null then skip("not-a-review-request")
             elif command_rest == null then skip("not-a-command")
+            # A closed (or merged) pull request is not reviewed. Checked after the command match, so an ordinary comment
+            # on one is still not-a-command, and before the author checks, so no lookup is made.
+            elif $issue.state == "closed" then skip("closed")
             elif $comment.user == null then skip("not-a-review-request")
             elif $comment.user.type == "Bot" then skip("bot")
             elif is_review_agent($comment.user.login) then skip("review-agent")
