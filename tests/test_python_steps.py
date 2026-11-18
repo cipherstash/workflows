@@ -22,8 +22,8 @@ class PythonStepsTest(unittest.TestCase):
                 ast.parse(script, filename=f"{job}.{step_id}", feature_version=(3, 10))
 
 
-# Scaffolding every step that makes a request defines, as an identical copy: the steps are inline scripts and cannot
-# share a module, so this check is what keeps a hardening fix from landing in one copy only.
+# Scaffolding every step that makes a request defines, as an identical copy: the steps are inline scripts for now and
+# cannot share a module, so this check is what keeps a hardening fix from landing in one copy only.
 REQUEST_SCAFFOLDING = (
     "TIMEOUT_SECONDS",
     "TOTAL_SECONDS",

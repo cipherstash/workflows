@@ -1,7 +1,8 @@
 """Runs one step of the reusable workflow on its own, with a controlled environment, for the unit tests.
 
-A reusable workflow runs in the calling repository, so its steps' scripts are kept inline in
-.github/workflows/claude-review.yml. The harness reads a step's script out of the workflow with yq, so the tests run
+The Python steps' scripts are kept inline in .github/workflows/claude-review.yml for now; issues #23 to #25 move them
+into files in this repository, which the workflow checks out the way it already does for the request decision.
+The harness reads a step's script out of the workflow with yq, so the tests run
 exactly what ships, and runs it the way the runner would: with python3, and with GITHUB_OUTPUT,
 GITHUB_STEP_SUMMARY and RUNNER_TEMP pointing at temporary files. Nothing else is inherited from the environment
 running the tests, so no proxy settings or real tokens leak in.
