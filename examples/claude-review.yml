@@ -4,7 +4,8 @@
 # Reviews a non-draft pull request when it is opened or reopened, or when a draft is marked ready for review, if its
 # author is a member of the @cipherstash/developers team. A team member can also ask for a review, on drafts too, by
 # commenting on a pull request with a first line starting `@cipherstash-agent review`; the rest of the comment is passed
-# on as instructions, and the comment gets a 👀 reaction once the request is sent. The rules live in the shared
+# on as instructions, and the comment gets a 👀 reaction once the request is sent. A team member can also request a
+# review from cipherstash-agent in a pull request's Reviewers box, on drafts too. The rules live in the shared
 # workflow, pinned below by commit.
 #
 # Comments run this file from the default branch, so the comment command works only once this file is merged there.
@@ -18,7 +19,7 @@ name: Claude review
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review, review_requested]
   issue_comment:
     types: [created]
 
@@ -31,6 +32,7 @@ jobs:
     # The mention must match the shared workflow's `review-agent` input: change it here too if you change that input.
     # The author_association test is a performance filter only, so a comment from anyone else does not start a runner.
     # It is not the gate: the shared workflow's team membership check decides who may request a review.
+    # pull_request events, including reviewer requests, are not filtered here.
     if: >-
       github.event_name != 'issue_comment' || (
       github.event.issue.pull_request
@@ -41,7 +43,7 @@ jobs:
     # command; its other jobs hold no permissions.
     permissions:
       issues: write
-    uses: cipherstash/workflows/.github/workflows/claude-review.yml@7d4aa83e871a1ba16eff02079c5a5c44cae47a3d # feat/comment-command (pre-release)
+    uses: cipherstash/workflows/.github/workflows/claude-review.yml@a5866f9990013456223d2a3ab3097a1370fd0d44 # feat/requested-reviewer (pre-release)
     with:
       routine-trigger-id: ${{ vars.CLAUDE_ROUTINE_TRIGGER_ID }}
     secrets:
