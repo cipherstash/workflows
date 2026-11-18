@@ -5,7 +5,7 @@
 #   input.json     the decision's input: {"event_name": ..., "event": <payload>, "review_agent": ..., "membership": ...}
 #   expected.json  the decision expected for that input
 #
-# Exits non-zero if any case fails. Needs bash, jq and yq (see request-decision/decide).
+# Exits non-zero if any case fails or there are no cases. Needs bash, jq and yq (see request-decision/decide).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cases_dir="$here/cases"
@@ -21,7 +21,11 @@ for case_dir in "$cases_dir"/*/; do
     failed=$((failed + 1))
     continue
   fi
-  expected="$(jq --sort-keys . "$case_dir/expected.json")"
+  if ! expected="$(jq --sort-keys . "$case_dir/expected.json")"; then
+    echo "FAIL $name: expected.json is missing or is not valid JSON"
+    failed=$((failed + 1))
+    continue
+  fi
   if [[ "$actual" == "$expected" ]]; then
     echo "ok   $name"
   else
@@ -30,6 +34,11 @@ for case_dir in "$cases_dir"/*/; do
     failed=$((failed + 1))
   fi
 done
+
+if [[ "$total" -eq 0 ]]; then
+  echo "FAIL no cases found in $cases_dir"
+  exit 1
+fi
 
 echo "$total cases, $failed failed"
 [[ "$failed" -eq 0 ]]
