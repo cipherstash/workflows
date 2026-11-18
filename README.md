@@ -186,7 +186,10 @@ An event that has no pull request author, comment author or sender to act as the
 
 Some steps, such as the membership lookup, the request to the routine trigger and the 👀 reaction, are written in Python.
 They use only Python's standard library and keep to Python 3.10, so nothing is installed when they run.
-Each one is kept inline in the reusable workflow, with `shell: python3 {0}` and an `id`.
+Each one is kept inline in the reusable workflow for now, with `shell: python3 {0}` and an `id`.
+Issues #23 to #25 move them into files in this repository.
+
+The workflows repository must stay public. A caller's built-in token reads the request decision from it, so if it became private, every run would end as decision-failed with an error.
 The unit tests in `tests/` read each step's script out of the workflow, so they test exactly what ships.
 
 ## Checks
@@ -231,5 +234,5 @@ python3 -m unittest discover --start-directory tests
 1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
 2. Run the unit tests and check the new test passes.
 
-The Python steps are inline scripts and cannot share a module, so each step that makes a request keeps its own copy of the shared scaffolding: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener` and `escaped`, and `error` and `output` in each step that has them.
+The Python steps are inline scripts for now, and inline scripts cannot share a module, so each step that makes a request keeps its own copy of the shared scaffolding: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener` and `escaped`, and `error` and `output` in each step that has them.
 `tests/test_python_steps.py` checks that every copy is identical, so a change to one copy must be made to all of them.

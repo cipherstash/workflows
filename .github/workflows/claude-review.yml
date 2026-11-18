@@ -60,12 +60,12 @@ jobs:
       decision: ${{ steps.final.outputs.decision }}
     env:
       # The request decision's jq program, from this repository's checkout (the checkout step below).
-      REQUEST_DECISION: ${{ github.workspace }}/.cipherstash-workflows/request-decision/decision.jq
+      REQUEST_DECISION_FILE: ${{ github.workspace }}/.cipherstash-workflows/request-decision/decision.jq
     steps:
       # A reusable workflow runs in the calling repository, so the request decision is checked out from this repository
       # at the commit the caller pinned: job.workflow_repository and job.workflow_sha name the reusable workflow, not
-      # the caller. Only the decision's file is checked out, into a directory no caller file uses, and no credentials
-      # are kept. The step is skipped if either value is empty, so it never falls back to the caller's repository and
+      # the caller. Only the decision's file is checked out. This job checks out no caller files, so its workspace is
+      # empty and the directory name is only a label. No credentials are kept. The step is skipped if either value is empty, so it never falls back to the caller's repository and
       # the pull request's own code.
       - name: Check out the request decision
         id: checkout
@@ -89,8 +89,8 @@ jobs:
         run: |
           # Without the checked-out decision there is nothing to run: this step fails, and the decision-failed skip
           # stands.
-          if [[ "$CHECKOUT_OUTCOME" != success || ! -f "$REQUEST_DECISION" ]]; then
-            echo "::error::Could not check out the request decision from the workflows repository; no review was requested"
+          if [[ "$CHECKOUT_OUTCOME" != success || ! -f "$REQUEST_DECISION_FILE" ]]; then
+            echo "::error::Could not get the request decision (checkout failed or file missing); no review was requested"
             exit 1
           fi
           request="$RUNNER_TEMP/request.json"
@@ -105,7 +105,7 @@ jobs:
             delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
             printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
           }
-          decision="$(jq --compact-output --from-file "$REQUEST_DECISION" "$request")"
+          decision="$(jq --compact-output --from-file "$REQUEST_DECISION_FILE" "$request")"
           requester="$(jq --raw-output '.requester // ""' <<<"$decision")"
           if [[ "$(jq --raw-output '.decision' <<<"$decision")" == lookup ]]; then
             needs_lookup=true
@@ -317,7 +317,7 @@ jobs:
             printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
           }
           decision="$(jq --compact-output --arg membership "$MEMBERSHIP" '.membership = $membership' "$RUNNER_TEMP/request.json" \
-            | jq --compact-output --from-file "$REQUEST_DECISION")"
+            | jq --compact-output --from-file "$REQUEST_DECISION_FILE")"
           output decision "$decision"
 
       - name: Report the decision
