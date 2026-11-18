@@ -104,10 +104,13 @@ Only one `fire` runs per pull request at a time, whichever kind of review reques
 ## The request decision
 
 The request decision is the part that reads a GitHub event and decides whether it is a review request to send on.
-It is one `jq` program, kept inline in the reusable workflow as the `decide` job's `REQUEST_DECISION` variable.
-It has to be inline because a reusable workflow runs in the calling repository and cannot read files from this one.
+It is one `jq` program, in `request-decision/decision.jq`.
 
-`request-decision/decide` reads the program out of the workflow with `yq` and runs it, so the tests run exactly what ships.
+A reusable workflow runs in the calling repository, so the `decide` job's first step checks out this repository to get the program.
+It checks out only that file, at the commit the caller pinned (`job.workflow_sha`), into `.cipherstash-workflows` in the job's workspace, and keeps no credentials.
+If the checkout fails, the decision is a skip with the reason `decision-failed`, and the run shows an error.
+
+`request-decision/test` runs the same file against the saved cases, so the tests run exactly what ships.
 
 ### Input
 
@@ -154,7 +157,7 @@ Exactly one of:
 | `fork` | The pull request comes from a fork, or from a fork that was deleted. |
 | `not-a-team-member` | The requester is not an active member of the team. |
 | `membership-lookup-failed` | Team membership could not be checked: GitHub could not be reached within 30 seconds, answered with an error status or a redirect (the lookup does not follow redirects), or gave an answer that is malformed or larger than 64 KiB. The run shows an error. |
-| `decision-failed` | The decision itself could not run, or did not finish. The workflow adds this reason itself, not the `jq` program. The run shows an error. |
+| `decision-failed` | The decision itself could not be checked out or run, or did not finish. The workflow adds this reason itself, not the `jq` program. The run shows an error. |
 
 An event that has no pull request or comment author, such as a payload whose `user` is `null`, is skipped as `not-a-review-request`.
 
@@ -162,7 +165,7 @@ An event that has no pull request or comment author, such as a payload whose `us
 
 Some steps, such as the membership lookup, the request to the routine trigger and the 👀 reaction, are written in Python.
 They use only Python's standard library and keep to Python 3.10, so nothing is installed when they run.
-Like the request decision, each one is kept inline in the reusable workflow, with `shell: python3 {0}` and an `id`, because a reusable workflow cannot read files from this repository.
+Each one is kept inline in the reusable workflow, with `shell: python3 {0}` and an `id`.
 The unit tests in `tests/` read each step's script out of the workflow, so they test exactly what ships.
 
 ## Checks
@@ -175,7 +178,7 @@ Every pull request, and every push to `main`, runs these checks:
 - A check of `request-decision/test` itself, run by `request-decision/test-runner`.
 - The unit tests of the Python steps, in `tests/`.
 
-The request decision's rules are tested against saved event payloads, so the tests need no network and run anywhere with `bash`, `jq` and `yq`:
+The request decision's rules are tested against saved event payloads. `request-decision/test` runs `request-decision/decision.jq` on each one, so the tests need no network and run anywhere with `bash` and `jq`:
 
 ```sh
 request-decision/test
