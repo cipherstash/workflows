@@ -299,30 +299,70 @@ jobs:
         env:
           FIRST: ${{ steps.first.outputs.decision }}
           SECOND: ${{ steps.second.outputs.decision }}
+        # Python's standard library only (3.10 features), so nothing is installed; tests/test_report.py runs this script.
+        shell: python3 {0}
         run: |
-          # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
-          output() {
-            local delimiter
-            delimiter="ghadelim_$(cat /proc/sys/kernel/random/uuid)"
-            printf '%s<<%s\n%s\n%s\n' "$1" "$delimiter" "$2" "$delimiter" >>"$GITHUB_OUTPUT"
-          }
-          failed='{"decision":"skip","reason":"decision-failed"}'
-          output decision "$failed"
-          decision="${SECOND:-$FIRST}"
-          # Only a finished decision, a skip or a fire, is passed on.
-          if ! jq --exit-status '.decision == "skip" or .decision == "fire"' <<<"$decision" >/dev/null 2>&1; then
-            echo "::error::The request decision did not finish; no review was requested"
-            decision="$failed"
-          fi
-          if [[ "$(jq --raw-output '.reason // ""' <<<"$decision")" == membership-lookup-failed ]]; then
-            echo "::error::Team membership could not be checked, so no review was requested"
-          fi
-          output decision "$decision"
-          jq --raw-output '
-            if .decision == "fire"
-            then "Claude review: requested (\(.kind), by @\(.requester), pull request #\(.pull_request.number))"
-            else "Claude review: skipped (\(.reason))"
-            end' <<<"$decision" | tee -a "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          import uuid
+
+          FAILED = '{"decision":"skip","reason":"decision-failed"}'
+
+
+          def output(name, value):
+              # A random delimiter makes any value safe, even one with a newline in it.
+              delimiter = f"ghadelim_{uuid.uuid4()}"
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as file:
+                  file.write(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+
+
+          def finished(value):
+              """The decision value parsed, if it is a finished decision (a skip or a fire), or else None."""
+              try:
+                  decision = json.loads(value)
+              except ValueError:
+                  return None
+              if isinstance(decision, dict) and decision.get("decision") in ("skip", "fire"):
+                  return decision
+              return None
+
+
+          def text(value):
+              # As jq's string interpolation: a string as it is, anything else as JSON.
+              return value if isinstance(value, str) else json.dumps(value)
+
+
+          def summary(decision):
+              if decision.get("decision") == "fire":
+                  pull_request = decision.get("pull_request")
+                  number = pull_request.get("number") if isinstance(pull_request, dict) else None
+                  line = (
+                      f"Claude review: requested ({text(decision.get('kind'))}, by @{text(decision.get('requester'))}, "
+                      f"pull request #{text(number)})"
+                  )
+              else:
+                  line = f"Claude review: skipped ({text(decision.get('reason'))})"
+              # One line, whatever the decision holds, so it cannot start a workflow command.
+              return line.replace("\r", " ").replace("\n", " ")
+
+
+          try:
+              output("decision", FAILED)
+              value = os.environ.get("SECOND") or os.environ.get("FIRST") or ""
+              decision = finished(value)
+              if decision is None:
+                  print("::error::The request decision did not finish; no review was requested", flush=True)
+                  value, decision = FAILED, json.loads(FAILED)
+              if decision.get("reason") == "membership-lookup-failed":
+                  print("::error::Team membership could not be checked, so no review was requested", flush=True)
+              # Passed on as the decision step wrote it.
+              output("decision", value)
+              line = summary(decision)
+              print(line, flush=True)
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as file:
+                  file.write(line + "\n")
+          except Exception as failure:  # The decision-failed skip, written first, stands.
+              print(f"::error::Could not report the request decision ({type(failure).__name__})", flush=True)
 
   # Fires the routine trigger. It holds no permissions and sees only the decision, never the event's free text.
   fire:
