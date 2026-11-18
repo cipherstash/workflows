@@ -52,7 +52,7 @@ All three secrets, `CLAUDE_ROUTINE_TOKEN`, `CLAUDE_REVIEW_APP_ID` and `CLAUDE_RE
 A run has two jobs:
 
 - `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
-- `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. A failed request shows as a failed step, but the job and the check stay green.
+- `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
 
 `fire` holds no permissions.
 Only one `fire` runs per pull request at a time: a second waits rather than cancelling the first.
@@ -101,7 +101,7 @@ An event that has no pull request author, such as a payload whose `user` is `nul
 
 ## Python steps
 
-Some steps, such as the membership lookup, are written in Python.
+Some steps, such as the membership lookup and the request to the routine trigger, are written in Python.
 They use only Python's standard library and keep to Python 3.10, so nothing is installed when they run.
 Like the request decision, each one is kept inline in the reusable workflow, with `shell: python3 {0}` and an `id`, because a reusable workflow cannot read files from this repository.
 The unit tests in `tests/` read each step's script out of the workflow, so they test exactly what ships.
@@ -129,7 +129,7 @@ request-decision/test
 
 ### Running the unit tests
 
-The unit tests need `python3` (3.10 or later), `bash` and `yq`, and no network: a test that needs GitHub's API starts a stand-in server on 127.0.0.1.
+The unit tests need `python3` (3.10 or later), `bash` and `yq`, and no network: a test that needs GitHub's API or the routine trigger starts a stand-in server on 127.0.0.1.
 
 ```sh
 python3 -m unittest discover --start-directory tests
@@ -140,8 +140,8 @@ python3 -m unittest discover --start-directory tests
 `tests/harness.py` runs one step of the reusable workflow on its own:
 
 - `run_step(job, step_id, env, api_url=...)` reads the step's script out of the workflow with `yq`, runs it with the step's shell, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`) and its `::error::` annotations (`.errors()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`.
-- `StubServer(routes)` stands in for GitHub's API. `routes` maps a path to a status and body, to `StubServer.HANG` for an answer that never comes, or to `StubServer.DROP` for a connection closed without one. It records every request.
-- `substitutions` replaces text in the script before it runs, such as a timeout constant lowered so a test does not wait. Each piece of text must appear exactly once in the script.
+- `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body, to `StubServer.HANG` for an answer that never comes, or to `StubServer.DROP` for a connection closed without one, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
+- `substitutions` replaces text in the script before it runs, such as a timeout constant lowered so a test does not wait, or the routine API's fixed address swapped for the stand-in server's. Each piece of text must appear exactly once in the script.
 
 1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
 2. Run the unit tests and check the new test passes.

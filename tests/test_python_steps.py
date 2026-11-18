@@ -8,7 +8,7 @@ from harness import python_steps, step_script
 
 class PythonStepsTest(unittest.TestCase):
     def test_the_workflow_has_python_steps(self):
-        self.assertLessEqual({("decide", "lookup"), ("decide", "final")}, set(python_steps()))
+        self.assertLessEqual({("decide", "lookup"), ("decide", "final"), ("fire", "send")}, set(python_steps()))
 
     def test_each_python_step_is_python_3_10(self):
         # The steps keep to Python 3.10, so a runner image with an older Python than today's still runs them. This
