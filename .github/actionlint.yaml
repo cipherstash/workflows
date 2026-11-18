@@ -1,0 +1,14 @@
+# actionlint configuration.
+#
+# GitHub added job.workflow_repository and job.workflow_sha on 3 September 2026.
+# The newest actionlint, v1.7.12 (30 March 2026), does not know them yet and reports
+# "property ... is not defined in object type". The shared review workflow uses them to
+# check out this repository at the commit the caller pinned (see #20, #21 and #22).
+#
+# Only those two messages are ignored, and only in claude-review.yml. Every other check
+# still runs on every file. Remove this file once an actionlint release knows the
+# job.workflow_* properties, and bump the pin in checks.yml.
+paths:
+  .github/workflows/claude-review.yml:
+    ignore:
+      - 'property "workflow_(repository|sha)" is not defined in object type'
