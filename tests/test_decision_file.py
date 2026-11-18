@@ -5,16 +5,26 @@ out the step files, and each runs them by path. A rename would pass every other 
 every run would end as decision-failed or with no review requested.
 """
 
+import functools
 import unittest
 
-from harness import CHECKOUT_PATH, ROOT, STEPS_DIR, WORKFLOW_FILES, _yq, checked_out_file, file_steps, step_file_path
+from harness import (
+    CHECKOUT_PATH,
+    ROOT,
+    STEPS_DIR,
+    WORKFLOW_FILES,
+    _yq,
+    checked_out_file,
+    file_steps,
+    step_field,
+    step_file_path,
+)
 
 
 def checkout(job="decide"):
     """The job's checkout directory and its sparse-checkout patterns."""
-    query = f'.jobs.{job}.steps[] | select(.id == "checkout") | .with.'
-    patterns = [line.strip() for line in _yq(query + '"sparse-checkout"').splitlines() if line.strip()]
-    return _yq(query + "path").strip(), patterns
+    patterns = [line.strip() for line in step_field(job, "checkout", '.with."sparse-checkout"').splitlines()]
+    return step_field(job, "checkout", ".with.path"), [pattern for pattern in patterns if pattern]
 
 
 def checked_out(path, patterns):
@@ -38,10 +48,6 @@ class DecisionFileTest(unittest.TestCase):
 
 
 class CheckoutTest(unittest.TestCase):
-    def test_the_harness_and_the_workflow_agree_on_the_checkout_path(self):
-        checkout_path, _ = checkout()
-        self.assertEqual(checkout_path, CHECKOUT_PATH)
-
     def test_each_job_that_checks_out_this_repository_names_the_checkout_in_its_env(self):
         # The step files and the request decision are named from WORKFLOW_FILES, so it must be the checkout's path.
         for job in sorted({job for job, _ in file_steps()}):
@@ -57,16 +63,6 @@ class CheckoutTest(unittest.TestCase):
                 path = ROOT / pattern[1:]
                 self.assertTrue(path.is_dir() if pattern.endswith("/") else path.is_file(), pattern)
 
-    def test_every_python_file_the_steps_need_is_checked_out(self):
-        # A step file imports the shared helper module, so every Python file beside it must be checked out too.
-        _, patterns = checkout()
-        files = sorted(STEPS_DIR.glob("*.py"))
-        self.assertNotEqual(files, [])
-        for file in files:
-            relative = file.relative_to(ROOT).as_posix()
-            with self.subTest(file=relative):
-                self.assertTrue(checked_out(relative, patterns), (relative, patterns))
-
 
 class StepFilesTest(unittest.TestCase):
     def test_each_step_file_is_a_file_in_this_repository_in_the_steps_directory(self):
@@ -79,7 +75,8 @@ class StepFilesTest(unittest.TestCase):
 
     def test_each_step_file_is_checked_out_by_its_own_job(self):
         # A job sees only its own workspace, so each job that runs a step file checks out this repository itself, in
-        # a step before the file's step, and its sparse patterns take in the file and the helper module beside it.
+        # a step before the file's step, into the path the harness expects, and its sparse patterns take in the file
+        # and every Python file beside it, such as the shared helper module it imports.
         for job, step_id in file_steps():
             with self.subTest(job=job, step=step_id):
                 ids = _yq(f".jobs.{job}.steps[].id").split()
@@ -87,7 +84,9 @@ class StepFilesTest(unittest.TestCase):
                 self.assertLess(ids.index("checkout"), ids.index(step_id))
                 checkout_path, patterns = checkout(job)
                 self.assertEqual(checkout_path, CHECKOUT_PATH)
-                for file in sorted(STEPS_DIR.glob("*.py")):
+                files = sorted(STEPS_DIR.glob("*.py"))
+                self.assertNotEqual(files, [])
+                for file in files:
                     relative = file.relative_to(ROOT).as_posix()
                     self.assertTrue(checked_out(relative, patterns), (relative, patterns))
 
@@ -104,11 +103,11 @@ class CheckoutStepsTest(unittest.TestCase):
     def test_each_checkout_is_the_same_apart_from_its_name_and_sparse_patterns(self):
         # Compared value by value, because each yq prints a whole step differently (one keeps its comments).
         def step(job):
-            query = f'.jobs.{job}.steps[] | select(.id == "checkout")'
-            keys = [key for key in _yq(query + " | keys | .[]").split() if key != "name"]
-            settings = [key for key in _yq(query + " | .with | keys | .[]").split() if key != "sparse-checkout"]
-            values = {key: _yq(f'{query} | ."{key}"').strip() for key in keys if key != "with"}
-            values.update({f"with.{key}": _yq(f'{query} | .with."{key}"').strip() for key in settings})
+            keys = [key for key in step_field(job, "checkout", "keys | .[]").split() if key != "name"]
+            settings = [key for key in step_field(job, "checkout", ".with | keys | .[]").split()
+                        if key != "sparse-checkout"]
+            values = {key: step_field(job, "checkout", f'."{key}"') for key in keys if key != "with"}
+            values.update({f"with.{key}": step_field(job, "checkout", f'.with."{key}"') for key in settings})
             return sorted(keys), sorted(settings), values
 
         for job in self.jobs():
@@ -118,14 +117,13 @@ class CheckoutStepsTest(unittest.TestCase):
     def test_each_checkout_is_of_this_repository_at_the_pinned_commit_without_credentials(self):
         for job in self.jobs():
             with self.subTest(job=job):
-                query = f'.jobs.{job}.steps[] | select(.id == "checkout") | '
-                self.assertEqual(_yq(query + ".if").strip(),
-                                 "job.workflow_repository != '' && job.workflow_sha != ''")
-                self.assertEqual(_yq(query + '."continue-on-error"').strip(), "true")
-                self.assertEqual(_yq(query + ".with.repository").strip(), "${{ job.workflow_repository }}")
-                self.assertEqual(_yq(query + ".with.ref").strip(), "${{ job.workflow_sha }}")
-                self.assertEqual(_yq(query + '.with."persist-credentials"').strip(), "false")
-                self.assertEqual(_yq(query + '.with."sparse-checkout-cone-mode"').strip(), "false")
+                field = functools.partial(step_field, job, "checkout")
+                self.assertEqual(field(".if"), "job.workflow_repository != '' && job.workflow_sha != ''")
+                self.assertEqual(field('."continue-on-error"'), "true")
+                self.assertEqual(field(".with.repository"), "${{ job.workflow_repository }}")
+                self.assertEqual(field(".with.ref"), "${{ job.workflow_sha }}")
+                self.assertEqual(field('.with."persist-credentials"'), "false")
+                self.assertEqual(field('.with."sparse-checkout-cone-mode"'), "false")
 
 if __name__ == "__main__":
     unittest.main()
