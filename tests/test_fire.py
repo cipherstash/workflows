@@ -4,7 +4,7 @@ import json
 import time
 import unittest
 
-from harness import StubServer, closed_port_url, run_step
+from harness import ROOT, StubServer, _yq, closed_port_url, run_step, run_step_as_written
 
 TOKEN = "sk-ant-unitTestRoutineTokenThatMustNeverBePrinted0001"
 TRIGGER_ID = "trig_01AbCdEf"
@@ -193,6 +193,34 @@ class GivenTheStepIsNotSetUp(FireTest):
                 result = self.fire(DECISION=value)
                 self.assert_not_sent(result, "has no request text")
                 self.assertEqual(self.stub.requests, [])
+
+
+class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
+    # The fire job checks out the step file from this repository. If that failed, the step's own script reports it.
+
+    def test_without_the_file_nothing_is_sent_and_an_error_says_why(self):
+        result = run_step_as_written("fire", "send", inputs(STEP_FILE="/nonexistent/steps/fire.py"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("sent", result.outputs)
+        self.assertEqual(
+            result.errors(),
+            ["Could not get the routine call's step file (checkout failed or file missing); no review was requested"],
+        )
+        self.assertNotIn(TOKEN, result.everything())
+
+    def test_a_failed_step_does_not_turn_the_check_red(self):
+        query = '.jobs.fire.steps[] | select(.id == "send") | ."continue-on-error"'
+        self.assertEqual(_yq(query).strip(), "true")
+
+    def test_with_the_file_the_step_runs_it(self):
+        # An invalid trigger id stops the file before any request, so this runs without a network.
+        result = run_step_as_written(
+            "fire", "send", inputs(STEP_FILE=str(ROOT / "steps" / "fire.py"), TRIGGER_ID="not-a-trigger")
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("sent", result.outputs)
+        self.assertEqual(len(result.errors()), 1, result.stdout)
+        self.assertIn("routine-trigger-id is not a trigger id", result.errors()[0])
 
 
 if __name__ == "__main__":

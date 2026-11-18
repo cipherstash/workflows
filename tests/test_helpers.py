@@ -17,7 +17,8 @@ class RedactedTest(unittest.TestCase):
         self.assertEqual(helpers.redacted("nothing here", "ghs_x"), "nothing here")
 
     def test_an_empty_token_leaves_the_text_unchanged(self):
-        # str.replace with an empty string would insert the marker between every character.
+        # str.replace with an empty string would insert the marker between every character. The routine call never
+        # gets this far with an empty token (tests/test_fire.py: an empty token is reported without a request).
         self.assertEqual(helpers.redacted("abc", ""), "abc")
 
 

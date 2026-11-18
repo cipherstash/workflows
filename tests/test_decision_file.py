@@ -1,7 +1,8 @@
 """The workflow's paths to the files it checks out from this repository must point at real files in this repository.
 
-The decide job checks out the request decision and the Python step files from this repository and runs them by path.
-A rename would pass every other test and fail only in production, where every run would end as decision-failed.
+The decide job checks out the request decision and the Python step files from this repository, and the fire job checks
+out the step files, and each runs them by path. A rename would pass every other test and fail only in production, where
+every run would end as decision-failed or with no review requested.
 """
 
 import unittest
@@ -9,9 +10,9 @@ import unittest
 from harness import CHECKOUT_PATH, ROOT, STEPS_DIR, WORKSPACE_PREFIX, _yq, file_steps, step_file_path
 
 
-def checkout():
-    """The decide job's checkout directory and its sparse-checkout patterns."""
-    query = '.jobs.decide.steps[] | select(.id == "checkout") | .with.'
+def checkout(job="decide"):
+    """The job's checkout directory and its sparse-checkout patterns."""
+    query = f'.jobs.{job}.steps[] | select(.id == "checkout") | .with.'
     patterns = [line.strip() for line in _yq(query + '"sparse-checkout"').splitlines() if line.strip()]
     return _yq(query + "path").strip(), patterns
 
@@ -70,11 +71,54 @@ class StepFilesTest(unittest.TestCase):
                 self.assertEqual(path.parent, STEPS_DIR)
 
     def test_each_step_file_is_checked_out_by_its_own_job(self):
-        # Only the decide job checks out this repository so far, so a step file in any other job could not be found.
+        # A job sees only its own workspace, so each job that runs a step file checks out this repository itself, in
+        # a step before the file's step, and its sparse patterns take in the file and the helper module beside it.
         for job, step_id in file_steps():
             with self.subTest(job=job, step=step_id):
-                self.assertEqual(job, "decide")
+                ids = _yq(f".jobs.{job}.steps[].id").split()
+                self.assertIn("checkout", ids)
+                self.assertLess(ids.index("checkout"), ids.index(step_id))
+                checkout_path, patterns = checkout(job)
+                self.assertEqual(checkout_path, CHECKOUT_PATH)
+                for file in sorted(STEPS_DIR.glob("*.py")):
+                    relative = file.relative_to(ROOT).as_posix()
+                    self.assertTrue(checked_out(relative, patterns), (relative, patterns))
 
+
+class CheckoutStepsTest(unittest.TestCase):
+    """Every job that checks out this repository does it the same way, so a hardening fix to one reaches them all."""
+
+    def jobs(self):
+        return sorted({job for job, _ in file_steps()})
+
+    def test_the_decide_and_fire_jobs_check_out_this_repository(self):
+        self.assertEqual(self.jobs(), ["decide", "fire"])
+
+    def test_each_checkout_is_the_same_apart_from_its_name_and_sparse_patterns(self):
+        # Compared value by value, because each yq prints a whole step differently (one keeps its comments).
+        def step(job):
+            query = f'.jobs.{job}.steps[] | select(.id == "checkout")'
+            keys = [key for key in _yq(query + " | keys | .[]").split() if key != "name"]
+            settings = [key for key in _yq(query + " | .with | keys | .[]").split() if key != "sparse-checkout"]
+            values = {key: _yq(f'{query} | ."{key}"').strip() for key in keys if key != "with"}
+            values.update({f"with.{key}": _yq(f'{query} | .with."{key}"').strip() for key in settings})
+            return sorted(keys), sorted(settings), values
+
+        for job in self.jobs():
+            with self.subTest(job=job):
+                self.assertEqual(step(job), step("decide"))
+
+    def test_each_checkout_is_of_this_repository_at_the_pinned_commit_without_credentials(self):
+        for job in self.jobs():
+            with self.subTest(job=job):
+                query = f'.jobs.{job}.steps[] | select(.id == "checkout") | '
+                self.assertEqual(_yq(query + ".if").strip(),
+                                 "job.workflow_repository != '' && job.workflow_sha != ''")
+                self.assertEqual(_yq(query + '."continue-on-error"').strip(), "true")
+                self.assertEqual(_yq(query + ".with.repository").strip(), "${{ job.workflow_repository }}")
+                self.assertEqual(_yq(query + ".with.ref").strip(), "${{ job.workflow_sha }}")
+                self.assertEqual(_yq(query + '.with."persist-credentials"').strip(), "false")
+                self.assertEqual(_yq(query + '.with."sparse-checkout-cone-mode"').strip(), "false")
 
 if __name__ == "__main__":
     unittest.main()
