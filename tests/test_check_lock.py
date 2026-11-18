@@ -71,7 +71,8 @@ class CheckLockTest(unittest.TestCase):
             "GH_TOKEN": "unused",
             **env,
         }
-        return subprocess.run([str(SCRIPT)], cwd=self.work, env=full, capture_output=True, text=True)
+        # A failing check is a result to check, not an error here.
+        return subprocess.run([str(SCRIPT)], cwd=self.work, env=full, capture_output=True, text=True, check=False)
 
     def annotations(self, result):
         return [line for line in result.stdout.splitlines() if line.startswith(("::error", "::warning"))]

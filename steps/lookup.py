@@ -31,10 +31,11 @@ class LookupFailed(Exception):
     """Membership could not be checked; the message says why."""
 
 
-def api(path, token):
+def api(path: str, token: str) -> tuple[int, bytes]:
     """GETs path from the GitHub API and returns (status, body), reading at most MAX_BODY_BYTES + 1 bytes of an
     answer. The token is only ever a request header."""
-    request = urllib.request.Request(
+    # The URL starts with the runner's GITHUB_API_URL, which no input can change.
+    request = urllib.request.Request(  # noqa: S310
         f"{os.environ['GITHUB_API_URL']}/{path}",
         headers={
             "Authorization": f"Bearer {token}",
@@ -60,11 +61,13 @@ def api(path, token):
         # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
         # reported.
         reason = getattr(failure, "reason", failure)
-        raise LookupFailed(f"Could not reach GitHub to look up team membership ({type(reason).__name__})")
+        raise LookupFailed(
+            f"Could not reach GitHub to look up team membership ({type(reason).__name__})"
+        ) from None
     return result
 
 
-def look_up(token, org, team, requester):
+def look_up(token: str, org: str, team: str, requester: str) -> str:
     if os.environ.get("TOKEN_OUTCOME") != "success" or not token:
         raise LookupFailed(
             "Could not create the membership App's token: check the CLAUDE_REVIEW_APP_ID and "
@@ -108,7 +111,7 @@ try:
     )
 except LookupFailed as failure:
     error(str(failure))
-except Exception as failure:  # Anything unexpected still ends as a reported lookup-failed, never a member.
+except Exception as failure:  # noqa: BLE001 Anything unexpected still ends as a reported lookup-failed, never a member.
     error(f"Cannot look up team membership: the lookup broke ({type(failure).__name__})")
 output("membership", membership)
 

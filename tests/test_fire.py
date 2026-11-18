@@ -97,7 +97,7 @@ class GivenTheRoutineAcceptsTheRequest(FireTest):
         self.assertEqual(json.loads(self.stub.bodies[0]), {"text": TEXT})
 
     def test_text_with_quotes_newlines_and_unicode_reaches_the_routine_unchanged(self):
-        text = 'Review "this" \\ one\nline two\r\n\ttabbed 👀 é ü   {"text": "x"} $(echo hi) `id`'
+        text = 'Review "this" \\ one\nline two\r\n\ttabbed 👀 é ü \u2028 {"text": "x"} $(echo hi) `id`'
         self.fire({FIRE_PATH: (200, "{}")}, DECISION=decision(text))
         self.assertEqual(json.loads(self.stub.bodies[0].decode("utf-8")), {"text": text})
 
@@ -151,7 +151,9 @@ class GivenTheRoutineRejectsTheRequest(FireTest):
 
 class GivenTheRoutineCannotBeReached(FireTest):
     def test_no_answer_in_time_is_not_sent(self):
-        result = self.fire({FIRE_PATH: StubServer.HANG}, substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"})
+        result = self.fire(
+            {FIRE_PATH: StubServer.HANG}, substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"}
+        )
         self.assert_not_sent(result, "Could not reach the routine trigger")
         self.assertEqual(len(self.stub.requests), 1, "the request was retried")
 
@@ -201,7 +203,9 @@ class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
     # The fire job checks out the step file from this repository. If that failed, the step's own script reports it.
 
     def test_without_the_file_nothing_is_sent_and_an_error_says_why(self):
-        result = run_step_as_written("fire", "send", inputs(STEP_FILE="/nonexistent/steps/fire.py", CHECKOUT_OUTCOME="success"))
+        result = run_step_as_written(
+            "fire", "send", inputs(STEP_FILE="/nonexistent/steps/fire.py", CHECKOUT_OUTCOME="success")
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("sent", result.outputs)
         self.assertEqual(
@@ -217,7 +221,9 @@ class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
     def test_with_the_file_the_step_runs_it(self):
         # An invalid trigger id stops the file before any request, so this runs without a network.
         result = run_step_as_written(
-            "fire", "send", inputs(CHECKOUT_OUTCOME="success", STEP_FILE=str(ROOT / "steps" / "fire.py"), TRIGGER_ID="not-a-trigger")
+            "fire",
+            "send",
+            inputs(CHECKOUT_OUTCOME="success", STEP_FILE=str(ROOT / "steps" / "fire.py"), TRIGGER_ID="not-a-trigger"),
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("sent", result.outputs)

@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import unittest
 
-from harness import ROOT, WORKFLOW, _yq, run_step, run_step_as_written, step_script
+from harness import ROOT, _yq, run_step, run_step_as_written, step_script
 
 FIRE = {
     "decision": "fire",
@@ -152,10 +152,12 @@ class GivenTheStepFileCannotRun(unittest.TestCase):
 class GivenTheDecisionFailedSkipIsWrittenInSeveralPlaces(unittest.TestCase):
     def test_the_job_output_fallback_the_wrapper_and_the_report_agree(self):
         failed = re.search(r"^FAILED = '(.*)'$", (ROOT / "steps" / "report.py").read_text(encoding="utf-8"), re.M)
-        self.assertIsNotNone(failed)
+        if failed is None:
+            self.fail("steps/report.py has no FAILED line")
         job_output = _yq(".jobs.decide.outputs.decision")
         fallback = re.search(r"\|\| '(.*)' \}\}", job_output)
-        self.assertIsNotNone(fallback, job_output)
+        if fallback is None:
+            self.fail(job_output)
         self.assertEqual(fallback.group(1), failed.group(1))
         script, _ = step_script("decide", "final")
         self.assertIn(f"echo 'decision={failed.group(1)}' >>\"$GITHUB_OUTPUT\"", script)

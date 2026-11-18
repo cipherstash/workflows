@@ -1,7 +1,7 @@
 """The fire job's step: fires the Claude code-review routine trigger with the request decision's text.
 
-Only a 2xx answer counts as sent, and writes the step output sent=true. Anything else is an error annotation and a failed
-step, which the step's continue-on-error keeps from turning the check red.
+Only a 2xx answer counts as sent, and writes the step output sent=true. Anything else is an error annotation and a
+failed step, which the step's continue-on-error keeps from turning the check red.
 
 Inputs, all environment variables: CLAUDE_ROUTINE_TOKEN (the routine's bearer token), TRIGGER_ID (the routine's trigger
 id), DECISION (the request decision) and the runner's GITHUB_OUTPUT.
@@ -33,7 +33,7 @@ class NotSent(Exception):
     """The request was not sent, or the routine trigger did not accept it; the message says why."""
 
 
-def excerpt(body, token):
+def excerpt(body: bytes, token: str) -> str:
     """The start of an answer's body, on one line, with the token taken out in case the answer repeats it."""
     text = redacted(body.decode("utf-8", errors="replace"), token)
     text = " ".join("".join(c if c.isprintable() else " " for c in text).split())
@@ -42,11 +42,12 @@ def excerpt(body, token):
     return text
 
 
-def post(url, token, body):
+def post(url: str, token: str, body: bytes) -> tuple[int, bytes]:
     """POSTs body to url once and returns (status, the start of an error answer's body, or b"" for a 2xx answer).
     There is no retry: a request that timed out may still have started a session, and a second would review twice.
     A failed request is re-run by hand. The token is only ever a request header."""
-    request = urllib.request.Request(
+    # The URL is API_BASE_URL's fixed https address, so no input can choose its scheme.
+    request = urllib.request.Request(  # noqa: S310
         url,
         data=body,
         method="POST",
@@ -80,12 +81,14 @@ def post(url, token, body):
             # URLError, timeouts, refused or dropped connections, an answer cut off before its status. Only the
             # failure's kind is reported.
             reason = getattr(failure, "reason", failure)
-            raise NotSent(f"Could not reach the routine trigger ({type(reason).__name__}); no review was requested")
+            raise NotSent(
+                f"Could not reach the routine trigger ({type(reason).__name__}); no review was requested"
+            ) from None
         # The status arrived; only the rest of the answer failed or ran out of time, so the status stands.
     return status, answer_body
 
 
-def fire(token, trigger_id, decision):
+def fire(token: str, trigger_id: str, decision: str) -> None:
     # An empty token stops here, so it never reaches a request or the excerpt.
     if not token:
         raise NotSent("CLAUDE_ROUTINE_TOKEN is empty: pass it to the reusable workflow as a secret")
@@ -121,6 +124,6 @@ try:
 except NotSent as failure:
     error(str(failure))
     sys.exit(1)
-except Exception as failure:  # Anything unexpected is reported by its kind only, and is not sent.
+except Exception as failure:  # noqa: BLE001 Anything unexpected is reported by its kind only, and is not sent.
     error(f"Could not send the review request: the step broke ({type(failure).__name__})")
     sys.exit(1)

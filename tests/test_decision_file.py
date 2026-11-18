@@ -121,8 +121,8 @@ class CheckoutStepsTest(unittest.TestCase):
                 self.assertEqual(_yq(query + '.with."sparse-checkout-cone-mode"').strip(), "false")
 
 class NoReactionWithoutASentRequestTest(unittest.TestCase):
-    """The react job runs only once the fire job's send step said sent. If the fire job's checkout failed, its step sends
-    nothing and writes no sent output, so the comment gets no reaction."""
+    """The react job runs only once the fire job's send step said sent. If the fire job's checkout failed, its step
+    sends nothing and writes no sent output, so the comment gets no reaction."""
 
     def test_the_fire_jobs_sent_output_is_the_send_steps_alone(self):
         self.assertEqual(_yq(".jobs.fire.outputs.sent").strip(), "${{ steps.send.outputs.sent }}")

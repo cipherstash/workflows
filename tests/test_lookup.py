@@ -3,6 +3,7 @@
 import json
 import time
 import unittest
+from typing import ClassVar
 
 from harness import ROOT, StubServer, closed_port_url, run_step, run_step_as_written
 
@@ -122,13 +123,17 @@ class GivenGitHubAnswersSomethingElse(LookupTest):
         # The stub sends a byte every 50 ms, so no single read times out (the per-read timeout stays at its 10 s): only
         # the total time can end the request.
         started = time.monotonic()
-        result = self.lookup({MEMBERSHIP_PATH: StubServer.DRIP}, substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
+        result = self.lookup(
+            {MEMBERSHIP_PATH: StubServer.DRIP}, substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"}
+        )
         elapsed = time.monotonic() - started
         self.assert_failed(result, "Could not reach GitHub to look up team membership (TotalTimeout)")
         self.assertLess(elapsed, 5, "the lookup ran on past its total time")
 
     def test_no_answer_in_time_fails_the_lookup(self):
-        result = self.lookup({MEMBERSHIP_PATH: StubServer.HANG}, substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"})
+        result = self.lookup(
+            {MEMBERSHIP_PATH: StubServer.HANG}, substitutions={"TIMEOUT_SECONDS = 10": "TIMEOUT_SECONDS = 0.5"}
+        )
         self.assert_failed(result, "Could not reach GitHub")
 
     def test_a_connection_closed_without_an_answer_fails_the_lookup(self):
@@ -166,7 +171,7 @@ class GivenNoUsableToken(LookupTest):
 
 
 class GivenANameThatIsNotValid(LookupTest):
-    INVALID = {
+    INVALID: ClassVar[dict[str, list[str]]] = {
         "ORG": ["", "-cipherstash", "cipher/stash", "..", "cipher stash", "cipherstash\n"],
         "TEAM": ["", ".", "..", "-team", "dev/../admins", "dev%2F", "dév"],
         "REQUESTER": ["", "-alice", "alice-", "al--ice", "al.ice", "alice/x", "alice\n", "alice?x=1"],

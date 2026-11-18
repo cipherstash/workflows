@@ -20,7 +20,7 @@ import urllib.request
 
 try:
     from helpers import TIMEOUT_SECONDS, TotalTimeout, opener, total_time_limit, warning
-except Exception as failure:  # A missing or broken helper module is still only a warning, like any other failure.
+except Exception as failure:  # noqa: BLE001 A broken helper module is still only a warning, like any other failure.
     print(
         f"::warning::Could not add the 👀 reaction: the shared helper module could not be loaded "
         f"({type(failure).__name__}); the review was still requested",
@@ -36,7 +36,7 @@ class NotReacted(Exception):
     """The reaction was not added; the message says why."""
 
 
-def comment_id(decision):
+def comment_id(decision: str) -> str | None:
     """The decision's comment id as a string of digits, or None. A JSON number of any size keeps every digit."""
     try:
         value = json.loads(decision).get("comment_id")
@@ -48,10 +48,11 @@ def comment_id(decision):
     return value if COMMENT_ID.fullmatch(value) else None
 
 
-def post(url, token):
+def post(url: str, token: str) -> int:
     """POSTs the 👀 reaction to url once and returns the answer's status. There is no retry. The token is only ever a
     request header."""
-    request = urllib.request.Request(
+    # The URL is the runner's GITHUB_API_URL with digits-only parts added, so no event field can choose its scheme.
+    request = urllib.request.Request(  # noqa: S310
         url,
         data=json.dumps({"content": "eyes"}, separators=(",", ":")).encode("utf-8"),
         method="POST",
@@ -83,12 +84,12 @@ def post(url, token):
             raise NotReacted(
                 f"Could not reach GitHub to add the 👀 reaction ({type(reason).__name__}); the review was still "
                 "requested"
-            )
+            ) from None
         # The status arrived; only closing the answer failed, so the status stands.
     return status
 
 
-def react(token, decision):
+def react(token: str, decision: str) -> None:
     comment = comment_id(decision)
     if comment is None:
         raise NotReacted("Could not react to the comment: its id is not a number")
@@ -110,6 +111,6 @@ try:
 except NotReacted as failure:
     warning(str(failure))
     sys.exit(1)
-except Exception as failure:  # Anything unexpected is reported by its kind only.
+except Exception as failure:  # noqa: BLE001 Anything unexpected is reported by its kind only.
     warning(f"Could not add the 👀 reaction: the step broke ({type(failure).__name__}); the review was still requested")
     sys.exit(1)

@@ -15,6 +15,7 @@ the Python jq wrapper.
 StubServer is a GitHub API stand-in on 127.0.0.1, answering each path with the status and body a test gives it.
 """
 
+import email.message
 import functools
 import http.server
 import os
@@ -96,7 +97,7 @@ def parse_outputs(text):
     return outputs
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def step_script(job, step_id):
     """The step's run script and shell, read out of the workflow. Only bash scripts are run from it."""
     script = _yq(_step_query(job, step_id) + " | .run")
@@ -117,7 +118,7 @@ def python_steps():
     return steps
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def file_steps():
     """(job, step id) for every step of the workflow that runs a step file, named by its env's STEP_FILE."""
     steps = []
@@ -131,7 +132,7 @@ def file_steps():
 def python_steps_without_id():
     """The names of the Python steps that have no id, which python_steps and file_steps cannot list and the tests
     cannot find."""
-    names = []
+    names: list[str] = []
     for job in _yq(".jobs | keys | .[]").split():
         query = (
             f'.jobs.{job}.steps[] | select((.shell == "{PYTHON_SHELL}" or .env.STEP_FILE != null) and .id == null)'
@@ -141,7 +142,7 @@ def python_steps_without_id():
     return names
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def step_file_path(job, step_id):
     """The step file, in this repository, that the step's STEP_FILE names in the workflow's checkout."""
     value = _yq(_step_query(job, step_id) + ' | .env.STEP_FILE // ""').strip()
@@ -151,7 +152,7 @@ def step_file_path(job, step_id):
     return ROOT / value[len(prefix):]
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def step_env_names(job, step_id):
     """The names in the step's env block."""
     return frozenset(_yq(_step_query(job, step_id) + " | (.env // {}) | keys | .[]").split())
@@ -224,8 +225,8 @@ def run_step_as_written(job, step_id, env, api_url="http://127.0.0.1:9", reposit
 
 def _run(command, env, api_url, repository, timeout):
     """Runs command(temp directory) with only env plus the runner's own variables, and returns a StepResult."""
-    with tempfile.TemporaryDirectory() as temp:
-        temp = pathlib.Path(temp)
+    with tempfile.TemporaryDirectory() as temp_name:
+        temp = pathlib.Path(temp_name)
         output_path = temp / "output"
         summary_path = temp / "summary"
         output_path.touch()
@@ -242,7 +243,10 @@ def _run(command, env, api_url, repository, timeout):
             "RUNNER_TEMP": str(runner_temp),
             **env,
         }
-        completed = subprocess.run(command(temp), env=full_env, capture_output=True, text=True, timeout=timeout)
+        # A step that fails is a result to check, not an error here.
+        completed = subprocess.run(
+            command(temp), env=full_env, capture_output=True, text=True, timeout=timeout, check=False
+        )
         return StepResult(
             completed.returncode,
             completed.stdout,
@@ -293,8 +297,8 @@ class StubServer:
 
     def __init__(self, routes=None):
         self.routes = dict(routes or {})
-        self.requests = []
-        self.bodies = []
+        self.requests: list[tuple[str, str, email.message.Message]] = []
+        self.bodies: list[bytes] = []
         self._release = threading.Event()
         stub = self
 

@@ -147,7 +147,7 @@ class GivenGitHubCannotBeReached(ReactTest):
 class GivenTheStepCannotReact(ReactTest):
     def test_an_invalid_comment_id_is_a_warning_without_a_request(self):
         for comment_id in (None, "", "12a", "1/../2", "12/reactions", "12?x=1", -1, 1.5, 1e30, True, [12], {"id": 12},
-                           "１２", "12\n", " 12"):
+                           "１２", "12\n", " 12"):  # noqa: RUF001 full-width digits, on purpose
             with self.subTest(comment_id=comment_id):
                 result = self.react(DECISION=decision(comment_id=comment_id))
                 self.assert_warned(result, "its id is not a number")
