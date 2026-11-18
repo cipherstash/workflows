@@ -95,9 +95,15 @@ class GivenGitHubAnswersSomethingElse(LookupTest):
     def test_a_redirect_is_not_followed_and_fails_the_lookup(self):
         for status in (301, 302, 303, 307, 308):
             with self.subTest(status=status):
-                result = self.lookup({MEMBERSHIP_PATH: (status, "")})
+                # The redirect points at a second server that would answer an active membership, so following it would
+                # show.
+                active = (200, json.dumps({"state": "active"}))
+                with StubServer({"/elsewhere": active}) as elsewhere:
+                    result = self.lookup({MEMBERSHIP_PATH: (status, "", {"Location": f"{elsewhere.url}/elsewhere"})})
                 self.assert_failed(result, f"GitHub answered HTTP {status}")
                 self.assertEqual(self.stub.paths(), [MEMBERSHIP_PATH])
+                self.assertEqual(elsewhere.requests, [], "the redirect was followed")
+                self.assertFalse(any(headers.get("Authorization") for _, _, headers in elsewhere.requests))
 
     def test_a_body_that_is_not_json_fails_the_lookup(self):
         result = self.lookup({MEMBERSHIP_PATH: (200, "<html>not json</html>")})

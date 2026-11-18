@@ -180,16 +180,33 @@ def closed_port_url():
 class StubServer:
     """A stand-in for the GitHub API on 127.0.0.1.
 
-    routes maps a path to (status, body), to HANG for an answer that never comes, to DROP for a connection closed
-    without an answer, or to DRIP for a 200 answer that sends one byte every 50 ms and never ends, so no single read
-    times out but the answer never completes, for GET and POST alike. A path with no route answers 404. Every request is recorded in requests
-    as (method, path, headers), and its body, as bytes (empty for a GET), at the same place in bodies. Headers are
-    looked up by name ignoring case, as HTTP does. Use as a context manager.
+    routes maps a path, for GET and POST alike, to one of:
+
+    - (status, body), or (status, body, headers) to add headers to the answer. A 3xx answer without a Location header
+      gets one pointing at a port nothing listens on.
+    - HANG, for an answer that never comes.
+    - DROP, for a connection closed without an answer.
+    - drip(status), for an answer whose status and headers arrive at once and whose body then sends one byte every
+      50 ms and never ends, so no single read times out but the answer never completes. DRIP is drip(200).
+
+    A path with no route answers 404. Every request is recorded in requests as (method, path, headers), and its body,
+    as bytes (empty for a GET), at the same place in bodies. Headers are looked up by name ignoring case, as HTTP does.
+    Use as a context manager.
     """
+
+    class Drip:
+        """An answer with this status whose body never ends."""
+
+        def __init__(self, status):
+            self.status = status
 
     HANG = object()
     DROP = object()
-    DRIP = object()
+    DRIP = Drip(200)
+
+    @staticmethod
+    def drip(status):
+        return StubServer.Drip(status)
 
     def __init__(self, routes=None):
         self.routes = dict(routes or {})
@@ -219,8 +236,8 @@ class StubServer:
                     # Closes the connection without an answer.
                     self.close_connection = True
                     return
-                if route is StubServer.DRIP:
-                    self.send_response(200)
+                if isinstance(route, StubServer.Drip):
+                    self.send_response(route.status)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
                     try:
@@ -231,13 +248,16 @@ class StubServer:
                         pass
                     self.close_connection = True
                     return
-                status, body = route
+                status, body, *rest = route
+                headers = dict(rest[0]) if rest else {}
+                if 300 <= status < 400:
+                    headers.setdefault("Location", "http://127.0.0.1:9/elsewhere")
                 data = body.encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
-                if 300 <= status < 400:
-                    self.send_header("Location", "http://127.0.0.1:9/elsewhere")
+                for name, value in headers.items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(data)
 

@@ -158,6 +158,7 @@ jobs:
         shell: python3 {0}
         run: |
           # Membership is never assumed: anything but a clear answer from GitHub is "lookup-failed", which skips.
+          import contextlib
           import http.client
           import json
           import os
@@ -189,10 +190,13 @@ jobs:
               """One request took longer than TOTAL_SECONDS."""
 
 
+          def escaped(message):
+              """message escaped as GitHub's workflow commands require, so no value can end an annotation or start another."""
+              return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
           def error(message):
-              # Escaped as GitHub's workflow commands require, so no value can end the annotation or start another.
-              escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-              print(f"::error::{escaped}", flush=True)
+              print(f"::error::{escaped(message)}", flush=True)
 
 
           def output(name, value):
@@ -209,12 +213,28 @@ jobs:
 
 
           # urllib.request reads the proxy settings of the environment (http_proxy, https_proxy and no_proxy, in either
-          # case) by default. Unlike curl, it does not read ALL_PROXY.
+          # case) by default, but not ALL_PROXY.
           opener = urllib.request.build_opener(NoRedirects)
 
 
           def on_total_timeout(signum, frame):
               raise TotalTimeout()
+
+
+          @contextlib.contextmanager
+          def total_time_limit():
+              """Raises TotalTimeout inside the block once TOTAL_SECONDS have passed. The block can end the limit early with
+              signal.setitimer(signal.ITIMER_REAL, 0). Leaving the block ends the limit and puts the previous SIGALRM handler
+              back, even if the alarm comes while that happens."""
+              previous = signal.signal(signal.SIGALRM, on_total_timeout)
+              signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
+              try:
+                  yield
+              finally:
+                  try:
+                      signal.setitimer(signal.ITIMER_REAL, 0)
+                  finally:
+                      signal.signal(signal.SIGALRM, previous)
 
 
           def api(path, token):
@@ -229,19 +249,17 @@ jobs:
                   },
               )
               result = None
-              previous = signal.signal(signal.SIGALRM, on_total_timeout)
-              signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
               try:
-                  try:
-                      with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-                          result = (response.status, response.read(MAX_BODY_BYTES + 1))
-                  except urllib.error.HTTPError as answer:
-                      # The body of a status other than 200 is never used.
-                      answer.close()
-                      result = (answer.code, b"")
-                  # Disarmed as soon as the answer is complete, so a late alarm cannot undo it.
-                  signal.setitimer(signal.ITIMER_REAL, 0)
-                  return result
+                  with total_time_limit():
+                      try:
+                          with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                              # Read with the time limit running: a 200's body is the membership, so one cut off is a
+                              # lookup-failed.
+                              result = (response.status, response.read(MAX_BODY_BYTES + 1))
+                      except urllib.error.HTTPError as answer:
+                          # The body of a status other than 200 is never used.
+                          answer.close()
+                          result = (answer.code, b"")
               except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
                   if result is not None:  # The alarm came after the answer was complete.
                       return result
@@ -249,9 +267,7 @@ jobs:
                   # reported.
                   reason = getattr(failure, "reason", failure)
                   raise LookupFailed(f"Could not reach GitHub to look up team membership ({type(reason).__name__})")
-              finally:
-                  signal.setitimer(signal.ITIMER_REAL, 0)
-                  signal.signal(signal.SIGALRM, previous)
+              return result
 
 
           def look_up(token, org, team, requester):
@@ -421,6 +437,7 @@ jobs:
         run: |
           # Only a 2xx answer counts as sent. Anything else is an error annotation and a failed step, which the job's
           # continue-on-error keeps from turning the check red.
+          import contextlib
           import http.client
           import json
           import os
@@ -435,7 +452,7 @@ jobs:
           API_BASE_URL = "https://api.anthropic.com"
           # Seconds to wait to connect, and then for each read of the answer.
           TIMEOUT_SECONDS = 10
-          # Seconds the whole request may take, however slowly the answer arrives.
+          # Seconds one request may take in all, however slowly the answer arrives.
           TOTAL_SECONDS = 30
           # The most of an error answer's body shown in the annotation.
           EXCERPT_CHARACTERS = 200
@@ -449,13 +466,16 @@ jobs:
 
 
           class TotalTimeout(Exception):
-              """The whole request took longer than TOTAL_SECONDS."""
+              """One request took longer than TOTAL_SECONDS."""
+
+
+          def escaped(message):
+              """message escaped as GitHub's workflow commands require, so no value can end an annotation or start another."""
+              return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
           def error(message):
-              # Escaped as GitHub's workflow commands require, so no value can end the annotation or start another.
-              escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-              print(f"::error::{escaped}", flush=True)
+              print(f"::error::{escaped(message)}", flush=True)
 
 
           def output(name, value):
@@ -481,7 +501,7 @@ jobs:
 
 
           # urllib.request reads the proxy settings of the environment (http_proxy, https_proxy and no_proxy, in either
-          # case) by default. Unlike curl, it does not read ALL_PROXY.
+          # case) by default, but not ALL_PROXY.
           opener = urllib.request.build_opener(NoRedirects)
 
 
@@ -489,10 +509,26 @@ jobs:
               raise TotalTimeout()
 
 
+          @contextlib.contextmanager
+          def total_time_limit():
+              """Raises TotalTimeout inside the block once TOTAL_SECONDS have passed. The block can end the limit early with
+              signal.setitimer(signal.ITIMER_REAL, 0). Leaving the block ends the limit and puts the previous SIGALRM handler
+              back, even if the alarm comes while that happens."""
+              previous = signal.signal(signal.SIGALRM, on_total_timeout)
+              signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
+              try:
+                  yield
+              finally:
+                  try:
+                      signal.setitimer(signal.ITIMER_REAL, 0)
+                  finally:
+                      signal.signal(signal.SIGALRM, previous)
+
+
           def post(url, token, body):
-              """POSTs body to url once and returns (status, the start of the answer's body). There is no retry: a request
-              that timed out may still have started a session, and a second would review twice. A failed request is re-run
-              by hand. The token is only ever a request header."""
+              """POSTs body to url once and returns (status, the start of an error answer's body, or b"" for a 2xx answer).
+              There is no retry: a request that timed out may still have started a session, and a second would review twice.
+              A failed request is re-run by hand. The token is only ever a request header."""
               request = urllib.request.Request(
                   url,
                   data=body,
@@ -504,35 +540,32 @@ jobs:
                       "Content-Type": "application/json",
                   },
               )
-              result = None
-              previous = signal.signal(signal.SIGALRM, on_total_timeout)
-              signal.setitimer(signal.ITIMER_REAL, TOTAL_SECONDS)
+              status = None
+              answer_body = b""
               try:
-                  try:
-                      with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-                          result = (response.status, response.read(4096))
-                  except urllib.error.HTTPError as answer:
+                  with total_time_limit():
                       try:
-                          answer_body = answer.read(4096)
-                      except (OSError, http.client.HTTPException):
-                          answer_body = b""
-                      finally:
-                          answer.close()
-                      result = (answer.code, answer_body)
-                  # Disarmed as soon as the answer is complete, so a late alarm cannot turn an accepted request into a
-                  # failure.
-                  signal.setitimer(signal.ITIMER_REAL, 0)
-                  return result
+                          with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                              # opener.open returns only a 2xx answer, so the routine trigger has accepted the request and a
+                              # session may have started. The time limit ends as soon as the status is known, and the body
+                              # is not read, so nothing after this can make an accepted request look not sent.
+                              status = response.status
+                              signal.setitimer(signal.ITIMER_REAL, 0)
+                      except urllib.error.HTTPError as answer:
+                          status = answer.code
+                          try:
+                              # Read with the time limit running, for the excerpt in the error annotation.
+                              answer_body = answer.read(4096)
+                          finally:
+                              answer.close()
               except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
-                  if result is not None:  # The alarm came after the answer was complete.
-                      return result
-                  # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
-                  # reported.
-                  reason = getattr(failure, "reason", failure)
-                  raise NotSent(f"Could not reach the routine trigger ({type(reason).__name__}); no review was requested")
-              finally:
-                  signal.setitimer(signal.ITIMER_REAL, 0)
-                  signal.signal(signal.SIGALRM, previous)
+                  if status is None:
+                      # URLError, timeouts, refused or dropped connections, an answer cut off before its status. Only the
+                      # failure's kind is reported.
+                      reason = getattr(failure, "reason", failure)
+                      raise NotSent(f"Could not reach the routine trigger ({type(reason).__name__}); no review was requested")
+                  # The status arrived; only the rest of the answer failed or ran out of time, so the status stands.
+              return status, answer_body
 
 
           def fire(token, trigger_id, decision):

@@ -79,6 +79,17 @@ class GivenTheRoutineAcceptsTheRequest(FireTest):
         self.assertEqual(headers.get("anthropic-beta"), "experimental-cc-routine-2026-04-01")
         self.assertEqual(headers.get("Content-Type"), "application/json")
 
+    def test_an_accepted_request_whose_answer_never_ends_is_sent(self):
+        # The status says the routine accepted the request, so a session may have started: the step does not wait for
+        # the rest of the answer, and a body that never ends cannot turn the request into "not sent".
+        for status in (200, 201):
+            with self.subTest(status=status):
+                started = time.monotonic()
+                result = self.fire({FIRE_PATH: StubServer.drip(status)},
+                                   substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
+                self.assert_sent(result)
+                self.assertLess(time.monotonic() - started, 5, "the step waited for the answer's body")
+
     def test_the_body_is_the_decision_text_and_nothing_else(self):
         self.fire({FIRE_PATH: (200, "{}")})
         self.assertEqual(json.loads(self.stub.bodies[0]), {"text": TEXT})
@@ -114,12 +125,26 @@ class GivenTheRoutineRejectsTheRequest(FireTest):
         result = self.fire({FIRE_PATH: (401, json.dumps({"message": f"bad token Bearer {TOKEN}"}))})
         self.assert_not_sent(result, "HTTP 401")
 
+    def test_an_error_answer_whose_body_never_ends_is_cut_off_and_reported_by_its_status(self):
+        # The stub sends a byte every 50 ms, so no single read times out (the per-read timeout stays at its 10 s): only
+        # the total time can end the read of the error's body.
+        started = time.monotonic()
+        result = self.fire({FIRE_PATH: StubServer.drip(500)},
+                           substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
+        elapsed = time.monotonic() - started
+        self.assert_not_sent(result, "The routine trigger answered HTTP 500; no review was requested")
+        self.assertLess(elapsed, 5, "the request ran on past its total time")
+
     def test_a_redirect_is_not_followed_and_not_sent(self):
         for status in (301, 302, 303, 307, 308):
             with self.subTest(status=status):
-                result = self.fire({FIRE_PATH: (status, "")})
+                # The redirect points at a second server that would accept the request, so following it would show.
+                with StubServer({"/elsewhere": (201, "{}")}) as elsewhere:
+                    result = self.fire({FIRE_PATH: (status, "", {"Location": f"{elsewhere.url}/elsewhere"})})
                 self.assert_not_sent(result, f"HTTP {status}")
                 self.assertEqual(self.stub.paths(), [FIRE_PATH])
+                self.assertEqual(elsewhere.requests, [], "the redirect was followed")
+                self.assertFalse(any(headers.get("Authorization") for _, _, headers in elsewhere.requests))
 
 
 class GivenTheRoutineCannotBeReached(FireTest):
@@ -128,14 +153,15 @@ class GivenTheRoutineCannotBeReached(FireTest):
         self.assert_not_sent(result, "Could not reach the routine trigger")
         self.assertEqual(len(self.stub.requests), 1, "the request was retried")
 
-    def test_an_answer_that_never_ends_is_cut_off_after_the_total_time(self):
-        # The stub sends a byte every 50 ms, so no single read times out (the per-read timeout stays at its 10 s): only
-        # the total time can end the request.
+    def test_an_answer_that_never_comes_is_cut_off_after_the_total_time(self):
+        # The per-read timeout stays at its 10 s, so only the total time can end the request this soon.
         started = time.monotonic()
-        result = self.fire({FIRE_PATH: StubServer.DRIP}, substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
+        result = self.fire({FIRE_PATH: StubServer.HANG},
+                           substitutions={"TOTAL_SECONDS = 30": "TOTAL_SECONDS = 0.5"})
         elapsed = time.monotonic() - started
         self.assert_not_sent(result, "Could not reach the routine trigger (TotalTimeout)")
         self.assertLess(elapsed, 5, "the request ran on past its total time")
+        self.assertEqual(len(self.stub.requests), 1, "the request was retried")
 
     def test_a_connection_closed_without_an_answer_is_not_sent(self):
         result = self.fire({FIRE_PATH: StubServer.DROP})

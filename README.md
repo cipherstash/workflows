@@ -140,8 +140,11 @@ python3 -m unittest discover --start-directory tests
 `tests/harness.py` runs one step of the reusable workflow on its own:
 
 - `run_step(job, step_id, env, api_url=...)` reads the step's script out of the workflow with `yq`, runs it with the step's shell, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`) and its `::error::` annotations (`.errors()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`.
-- `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body, to `StubServer.HANG` for an answer that never comes, or to `StubServer.DROP` for a connection closed without one, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
+- `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body (and, optionally, headers to add, such as a redirect's `Location`), to `StubServer.HANG` for an answer that never comes, to `StubServer.DROP` for a connection closed without one, or to `StubServer.drip(status)` for an answer whose body never ends, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
 - `substitutions` replaces text in the script before it runs, such as a timeout constant lowered so a test does not wait, or the routine API's fixed address swapped for the stand-in server's. Each piece of text must appear exactly once in the script.
 
 1. Add a test method to the step's test file, such as `tests/test_lookup.py`, or a new `tests/test_<step>.py` for a new step. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
 2. Run the unit tests and check the new test passes.
+
+The Python steps are inline scripts and cannot share a module, so each step that makes a request keeps its own copy of the shared scaffolding: the timeouts, `TotalTimeout`, `total_time_limit`, `NoRedirects`, `opener`, `escaped` and `output`.
+`tests/test_python_steps.py` checks that every copy is identical, so a change to one copy must be made to all of them.
