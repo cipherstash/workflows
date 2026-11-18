@@ -26,7 +26,9 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color .github/workflows/*.yml examples/*.yml
 
   # Audits the workflows, the example callers and the Dependabot configuration for security problems. Fails on any
-  # finding, of any severity, with zizmor's default ("regular") persona. A finding is either fixed or accepted with
+  # finding, of any severity, with zizmor's default ("regular") persona. zizmor exits with 11 to 14 when it has
+  # findings, whatever the output format; only --format=sarif and --no-exit-codes (and --fix, once it fixed
+  # everything) turn that off, so --format=github fails the job. See "Exit codes" at https://docs.zizmor.sh/usage/. A finding is either fixed or accepted with
   # an inline `# zizmor: ignore[<audit>] <reason>` comment on the line zizmor reports. Findings show as annotations
   # on the pull request.
   zizmor:
@@ -67,8 +69,8 @@ jobs:
     permissions:
       contents: read
     env:
-      GH_TOKEN: ${{ github.token }}
-      # The gh-actions-lock extension's release, and the SHA-256 of its linux-amd64 binary as the release lists it.
+      # The gh-actions-lock extension's release, and the SHA-256 of its linux-amd64 binary as the release lists it. To
+      # update them, see "Updating gh-actions-lock" in the README.
       GH_ACTIONS_LOCK_VERSION: v0.4.1
       GH_ACTIONS_LOCK_SHA256: 39deb2fe714dbf74b073d8245fc7f3d50cd0eee18d5c0900e9e849ae933ae17e
     steps:
@@ -79,6 +81,8 @@ jobs:
       # against its hash, and installed from a local directory instead. gh installs a local extension from the current
       # directory only, and the directory's name must be the extension's.
       - name: Install gh-actions-lock
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           dir="$RUNNER_TEMP/gh-actions-lock"
           mkdir -p "$dir"
@@ -88,40 +92,13 @@ jobs:
           chmod +x "$dir/gh-actions-lock"
           (cd "$dir" && gh extension install .)
           gh actions-lock --version
+      # The logic is in .github/scripts/check-lock, which tests/test_check_lock.py tests. BASE_REF goes in the
+      # environment rather than into the script text, so that nothing from the pull request is read as shell.
       - name: Check the lockfile
-        run: |
-          lockfile=.github/workflows/actions.lock
-          # Escapes text for a workflow command's message, ending each line with an escaped line break so that the
-          # message stays on one line.
-          escape() { sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk 'BEGIN { ORS = "%0A" } { print }'; }
-          # Writes one annotation of level $1 and title $2: $3, then what `gh actions-lock` made.
-          report() {
-            {
-              printf '::%s file=%s,title=%s::%s%%0A' "$1" "$lockfile" "$2" "$3"
-              git status --short -- .github/workflows | escape
-              if [ -f "$lockfile" ]; then
-                printf 'SHA-256 of the lockfile it made: %s%%0ABase64: %s%%0A' \
-                  "$(sha256sum "$lockfile" | cut -d' ' -f1)" "$(base64 --wrap=0 "$lockfile")"
-                escape < "$lockfile"
-              fi
-              printf '%%0A'
-              git diff -- .github/workflows ':!.github/workflows/actions.lock' | escape
-              echo
-            }
-          }
-          if [ ! -f "$lockfile" ]; then
-            gh actions-lock --no-interactive || true
-            report warning "No workflow lockfile yet" \
-              "Not checked: $lockfile is not committed. gh actions-lock would make these changes:"
-            exit 0
-          fi
-          if gh actions-lock --verify && gh actions-lock --no-interactive && git diff --quiet -- .github/workflows; then
-            exit 0
-          fi
-          gh actions-lock --no-interactive || true
-          report error "Workflow lockfile out of date" \
-            "Run gh actions-lock and commit the result. gh actions-lock made these changes:"
-          exit 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
+        run: .github/scripts/check-lock
 
   request-decision:
     runs-on: ubuntu-latest
