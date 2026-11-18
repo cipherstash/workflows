@@ -106,11 +106,8 @@ jobs:
           }
           decision="$(jq --compact-output --from-file "$REQUEST_DECISION_FILE" "$request")"
           requester="$(jq --raw-output '.requester // ""' <<<"$decision")"
-          if [[ "$(jq --raw-output '.decision' <<<"$decision")" == lookup ]]; then
-            needs_lookup=true
-          else
-            needs_lookup=false
-          fi
+          # "true" or "false".
+          needs_lookup="$(jq '.decision == "lookup"' <<<"$decision")"
           output decision "$decision"
           output requester "$requester"
           # The later steps test this one output, not the decision's text.
