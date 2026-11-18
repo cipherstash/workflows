@@ -131,9 +131,9 @@ jobs:
 
   # Runs both test seams on each Python version a GitHub-hosted Ubuntu runner may provide: the request decision's
   # saved cases (and the check of their test script) and the unit tests of the reusable workflow's Python steps. 3.10
-  # is the oldest the steps support, and 3.14 is the Python of ubuntu-latest today. jq and yq are the ones preinstalled
-  # on ubuntu-latest, which setup-python leaves on the PATH. The tests need nothing installed and no network beyond
-  # 127.0.0.1.
+  # is the oldest the steps support, and 3.14 covers the runner's own python3, whatever ubuntu-latest provides. jq
+  # and yq are the ones preinstalled on ubuntu-latest, which setup-python leaves on the PATH. The tests need nothing
+  # installed and no network beyond 127.0.0.1.
   tests:
     name: tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
