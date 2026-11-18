@@ -1,5 +1,6 @@
-# Checks every pull request to this repository: lints the workflows and the example callers, runs the request
-# decision's saved cases, and runs the unit tests of the reusable workflow's Python steps.
+# Checks every pull request to this repository, and every push to main: lints the workflows and the example callers,
+# checks the request decision's test script, runs the request decision's saved cases, and runs the unit tests of the
+# reusable workflow's Python steps.
 name: Checks
 
 on:
@@ -31,6 +32,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Check the test script
+        run: request-decision/test-runner
       - name: Run the saved cases
         run: request-decision/test
 
