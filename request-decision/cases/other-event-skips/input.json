@@ -1,8 +1,16 @@
 {
   "event_name": "issues",
+  "review_agent": "cipherstash-agent",
+  "membership": null,
   "event": {
     "action": "opened",
-    "issue": {"number": 1, "title": "Not a pull request"},
-    "sender": {"login": "octocat", "type": "User"}
+    "issue": {
+      "number": 1,
+      "title": "Not a pull request"
+    },
+    "sender": {
+      "login": "octocat",
+      "type": "User"
+    }
   }
 }

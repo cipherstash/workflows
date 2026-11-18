@@ -1,0 +1,10 @@
+{
+  "decision": "fire",
+  "kind": "ready",
+  "requester": "CipherStash-Agent",
+  "pull_request": {
+    "number": 42,
+    "url": "https://github.com/cipherstash/example/pull/42"
+  },
+  "text": "Review pull request #42 in cipherstash/example: https://github.com/cipherstash/example/pull/42"
+}

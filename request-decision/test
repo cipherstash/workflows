@@ -2,10 +2,10 @@
 # Runs every saved case through the request decision and compares the result with the expected decision.
 #
 # Each case is a directory under request-decision/cases/ holding:
-#   input.json     the decision's input: {"event_name": ..., "event": <payload>}
+#   input.json     the decision's input: {"event_name": ..., "event": <payload>, "review_agent": ..., "membership": ...}
 #   expected.json  the decision expected for that input
 #
-# Exits non-zero if any case fails. Needs only bash and jq.
+# Exits non-zero if any case fails. Needs bash, jq and yq (see request-decision/decide).
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cases_dir="$here/cases"

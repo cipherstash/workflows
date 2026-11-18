@@ -1,0 +1,252 @@
+# Asks Claude for a code review of a pull request: decides whether the calling event is a review request from a team
+# member and, if it is, fires the Claude code-review routine trigger for that pull request.
+#
+# Called from a short caller workflow in each repository (see examples/claude-review.yml). A reusable workflow runs in
+# the calling repository, so everything it needs is in this file: the request decision's jq program is the decide job's
+# REQUEST_DECISION variable, and request-decision/test runs this same program against saved cases.
+#
+# Kinds of review request handled so far: Ready (a non-draft pull request opened or reopened, or a draft marked ready
+# for review). Drafts, bots' pull requests, forks and deleted forks are skipped, and so is a pull request whose author
+# is not a team member. A pull request opened by the review agent is reviewed without a membership lookup.
+name: Claude review
+
+on:
+  workflow_call:
+    inputs:
+      routine-trigger-id:
+        description: The Claude code-review routine's trigger id (`trig_…`), usually `vars.CLAUDE_ROUTINE_TRIGGER_ID`.
+        type: string
+        required: true
+      team:
+        description: The slug of the team, in the calling repository's owner organisation, whose members may request a review.
+        type: string
+        default: developers
+      review-agent:
+        description: The login of the review agent, the account whose pull requests are reviewed without a membership lookup.
+        type: string
+        default: cipherstash-agent
+    secrets:
+      CLAUDE_ROUTINE_TOKEN:
+        description: The code-review routine's bearer token.
+        required: true
+      CLAUDE_REVIEW_APP_ID:
+        description: The id of the GitHub App, installed on the organisation with only "Members, read", that looks up team membership.
+        required: true
+      CLAUDE_REVIEW_APP_PRIVATE_KEY:
+        description: That GitHub App's private key.
+        required: true
+
+permissions: {}
+
+jobs:
+  # Decides whether the event is a review request to send on. Untrusted text (titles, branch names, logins) is read
+  # from the event payload file or passed through environment variables, never placed in a script by an expression.
+  # Every failure here ends as a skip with an error annotation; the job itself stays green.
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      decision: ${{ steps.final.outputs.decision }}
+    env:
+      # The request decision. Input: {event_name, event, review_agent, membership}, where membership is null before a
+      # lookup, or "member", "not-member" or "lookup-failed" after one. Output, exactly one of:
+      #   {"decision": "skip", "reason": "<code>"}
+      #   {"decision": "lookup", "requester": "<login>"}
+      #   {"decision": "fire", "kind": "ready", "requester": "<login>", "pull_request": {"number": N, "url": "…"}, "text": "…"}
+      REQUEST_DECISION: |
+        def skip($reason): {decision: "skip", reason: $reason};
+
+        # Fires for a member, or asks for a lookup when membership is not known yet.
+        def gate($requester; $fire):
+          if .membership == null then {decision: "lookup", requester: $requester}
+          elif .membership == "member" then $fire
+          elif .membership == "not-member" then skip("not-a-team-member")
+          # "lookup-failed", or anything unexpected: membership is never assumed.
+          else skip("membership-lookup-failed")
+          end;
+
+        # GitHub logins are not case-sensitive.
+        def is_review_agent($login): ($login // "" | ascii_downcase) as $l | $l != "" and $l == (.review_agent // "" | ascii_downcase);
+
+        # Ready: a non-draft pull request opened or reopened, or a draft marked ready for review. The requester is the
+        # author. A pull request the review agent opened is reviewed without a lookup: the agent opens most pull
+        # requests, and they need review too.
+        def ready:
+          .event.pull_request as $pr
+          | {
+              decision: "fire",
+              kind: "ready",
+              requester: $pr.user.login,
+              pull_request: {number: $pr.number, url: $pr.html_url},
+              text: "Review pull request #\($pr.number) in \(.event.repository.full_name): \($pr.html_url)"
+            } as $fire
+          | if $pr.draft == true then skip("draft")
+            elif $pr.user.type == "Bot" then skip("bot")
+            elif $pr.head.repo == null or $pr.head.repo.full_name != $pr.base.repo.full_name then skip("fork")
+            elif is_review_agent($pr.user.login) then $fire
+            else gate($pr.user.login; $fire)
+            end;
+
+        if .event_name == "pull_request" and (.event.action | IN("opened", "reopened", "ready_for_review"))
+        then ready
+        else skip("not-a-review-request")
+        end
+    steps:
+      - name: Decide (before any membership lookup)
+        id: first
+        continue-on-error: true
+        env:
+          REVIEW_AGENT: ${{ inputs.review-agent }}
+        run: |
+          request="$RUNNER_TEMP/request.json"
+          jq --null-input --compact-output \
+            --arg event_name "$GITHUB_EVENT_NAME" \
+            --arg review_agent "$REVIEW_AGENT" \
+            --slurpfile event "$GITHUB_EVENT_PATH" \
+            '{event_name: $event_name, event: $event[0], review_agent: $review_agent, membership: null}' >"$request"
+          decision="$(jq --compact-output "$REQUEST_DECISION" "$request")"
+          echo "decision=$decision" >>"$GITHUB_OUTPUT"
+          echo "requester=$(jq --raw-output '.requester // ""' <<<"$decision")" >>"$GITHUB_OUTPUT"
+
+      - name: Create the membership App's token
+        id: app-token
+        if: steps.first.outcome == 'success' && fromJSON(steps.first.outputs.decision).decision == 'lookup'
+        # A failed token is reported by the next step and skips the request.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-members: read
+
+      - name: Look up team membership
+        id: lookup
+        if: steps.first.outcome == 'success' && fromJSON(steps.first.outputs.decision).decision == 'lookup'
+        continue-on-error: true
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          TOKEN_OUTCOME: ${{ steps.app-token.outcome }}
+          ORG: ${{ github.repository_owner }}
+          TEAM: ${{ inputs.team }}
+          REQUESTER: ${{ steps.first.outputs.requester }}
+        run: |
+          # Membership is never assumed: anything but a clear answer from GitHub is "lookup-failed", which skips.
+          membership=lookup-failed
+          api() {
+            # The token goes in on standard input, never on curl's command line.
+            curl --silent --show-error --connect-timeout 10 --max-time 30 \
+              --output "$RUNNER_TEMP/lookup.json" --write-out '%{http_code}' \
+              -H @- \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/$1" <<<"Authorization: Bearer $APP_TOKEN" || true
+          }
+          if [[ "$TOKEN_OUTCOME" != success || -z "$APP_TOKEN" ]]; then
+            echo "::error::Could not create the membership App's token: check the CLAUDE_REVIEW_APP_ID and CLAUDE_REVIEW_APP_PRIVATE_KEY secrets, and that the App is installed on $ORG with Members: read"
+          elif ! [[ "$ORG" =~ ^[A-Za-z0-9-]+$ && "$TEAM" =~ ^[A-Za-z0-9_.-]+$ && "$REQUESTER" =~ ^[A-Za-z0-9-]+$ ]]; then
+            echo "::error::Cannot look up team membership: the organisation, team or requester is not a valid GitHub name"
+          else
+            status="$(api "orgs/$ORG/teams/$TEAM/memberships/$REQUESTER")"
+            case "$status" in
+              200)
+                # A pending invitation is not membership.
+                if jq --exit-status '.state == "active"' "$RUNNER_TEMP/lookup.json" >/dev/null; then
+                  membership=member
+                else
+                  membership=not-member
+                fi
+                ;;
+              404)
+                # GitHub also answers 404 for a team that does not exist, which would otherwise skip everyone quietly.
+                team_status="$(api "orgs/$ORG/teams/$TEAM")"
+                if [[ "$team_status" == 200 ]]; then
+                  membership=not-member
+                else
+                  echo "::error::Cannot look up team membership: team $ORG/$TEAM was not found (HTTP $team_status); check the team input and the App's installation"
+                fi
+                ;;
+              *)
+                echo "::error::Cannot look up team membership in $ORG/$TEAM: GitHub answered HTTP $status"
+                ;;
+            esac
+          fi
+          echo "membership=$membership" >>"$GITHUB_OUTPUT"
+
+      - name: Decide (with the membership lookup's result)
+        id: second
+        if: steps.first.outcome == 'success' && fromJSON(steps.first.outputs.decision).decision == 'lookup'
+        continue-on-error: true
+        env:
+          MEMBERSHIP: ${{ steps.lookup.outputs.membership || 'lookup-failed' }}
+        run: |
+          decision="$(jq --compact-output --arg membership "$MEMBERSHIP" '.membership = $membership' "$RUNNER_TEMP/request.json" \
+            | jq --compact-output "$REQUEST_DECISION")"
+          echo "decision=$decision" >>"$GITHUB_OUTPUT"
+
+      - name: Report the decision
+        id: final
+        if: always()
+        env:
+          FIRST: ${{ steps.first.outputs.decision }}
+          SECOND: ${{ steps.second.outputs.decision }}
+        run: |
+          decision="${SECOND:-$FIRST}"
+          if [[ -z "$decision" ]] || [[ "$(jq --raw-output '.decision' <<<"$decision")" == lookup ]]; then
+            echo "::error::The request decision did not finish; no review was requested"
+            decision='{"decision":"skip","reason":"decision-failed"}'
+          fi
+          if [[ "$(jq --raw-output '.reason // ""' <<<"$decision")" == membership-lookup-failed ]]; then
+            echo "::error::Team membership could not be checked, so no review was requested"
+          fi
+          echo "decision=$decision" >>"$GITHUB_OUTPUT"
+          jq --raw-output '
+            if .decision == "fire"
+            then "Claude review: requested (\(.kind), by @\(.requester), pull request #\(.pull_request.number))"
+            else "Claude review: skipped (\(.reason))"
+            end' <<<"$decision" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Fires the routine trigger. It holds no permissions and sees only the decision, never the event's free text.
+  fire:
+    needs: decide
+    if: fromJSON(needs.decide.outputs.decision).decision == 'fire'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    # One request per pull request at a time. A second waits rather than cancelling the first, whose request may already
+    # have started a session; a third replaces the waiting one. This serialises only the fire request, not the review
+    # session it starts, so sessions can overlap.
+    concurrency:
+      group: claude-review-${{ github.repository }}-${{ fromJSON(needs.decide.outputs.decision).pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Fire the code-review routine
+        # The review is advisory: a failed request (an outage, a revoked token) shows as a failed step in this run, not
+        # as a red check on the pull request.
+        continue-on-error: true
+        env:
+          CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
+          TRIGGER_ID: ${{ inputs.routine-trigger-id }}
+          DECISION: ${{ needs.decide.outputs.decision }}
+        run: |
+          if [ -z "$CLAUDE_ROUTINE_TOKEN" ]; then
+            echo "::error::CLAUDE_ROUTINE_TOKEN is empty: pass it to the reusable workflow as a secret"
+            exit 1
+          fi
+          # The id goes into the URL, so anything but a trigger id is refused.
+          if ! [[ "$TRIGGER_ID" =~ ^trig_[A-Za-z0-9]+$ ]]; then
+            echo "::error::routine-trigger-id is not a trigger id (trig_…): pass vars.CLAUDE_ROUTINE_TRIGGER_ID, set under Settings > Secrets and variables > Actions > Variables"
+            exit 1
+          fi
+          # jq writes the body, so nothing in the pull request's fields can break the JSON.
+          body="$(jq --compact-output '{text: .text}' <<<"$DECISION")"
+          # No retry: a request that timed out may still have started a session, and a second would review twice. A
+          # failed request is re-run by hand. The token goes in on standard input, never on curl's command line.
+          curl --fail-with-body --silent --show-error --connect-timeout 10 --max-time 30 -X POST \
+            "https://api.anthropic.com/v1/claude_code/routines/$TRIGGER_ID/fire" \
+            -H @- \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+            -H "Content-Type: application/json" \
+            -d "$body" <<<"Authorization: Bearer $CLAUDE_ROUTINE_TOKEN"
