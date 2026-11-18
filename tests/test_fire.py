@@ -203,7 +203,9 @@ class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
     # The fire job checks out the step file from this repository. If that failed, the step's own script reports it.
 
     def test_without_the_file_nothing_is_sent_and_an_error_says_why(self):
-        result = run_step_as_written("fire", "send", inputs(STEP_FILE="/nonexistent/steps/fire.py", CHECKOUT_OUTCOME="success"))
+        result = run_step_as_written(
+            "fire", "send", inputs(STEP_FILE="/nonexistent/steps/fire.py", CHECKOUT_OUTCOME="success")
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("sent", result.outputs)
         self.assertEqual(
@@ -219,7 +221,9 @@ class GivenTheStepFileWasNotCheckedOut(unittest.TestCase):
     def test_with_the_file_the_step_runs_it(self):
         # An invalid trigger id stops the file before any request, so this runs without a network.
         result = run_step_as_written(
-            "fire", "send", inputs(CHECKOUT_OUTCOME="success", STEP_FILE=str(ROOT / "steps" / "fire.py"), TRIGGER_ID="not-a-trigger")
+            "fire",
+            "send",
+            inputs(CHECKOUT_OUTCOME="success", STEP_FILE=str(ROOT / "steps" / "fire.py"), TRIGGER_ID="not-a-trigger"),
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("sent", result.outputs)
