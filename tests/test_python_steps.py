@@ -1,6 +1,7 @@
 """Every Python step in the reusable workflow: the rules that hold for all of them."""
 
 import ast
+import sys
 import unittest
 
 from harness import STEPS_DIR, file_steps, python_steps, python_steps_without_id, step_script
@@ -33,6 +34,14 @@ class PythonStepsTest(unittest.TestCase):
         for path in sorted(STEPS_DIR.glob("*.py")):
             with self.subTest(file=path.name):
                 ast.parse(path.read_text(encoding="utf-8"), filename=str(path), feature_version=(3, 10))
+
+    def test_steps_is_flat(self):
+        # The harness and the checkout test list steps/*.py only, so a subdirectory with Python in it would go untested.
+        self.assertEqual(sorted(p.as_posix() for p in STEPS_DIR.rglob("*.py") if p.parent != STEPS_DIR), [])
+
+    def test_no_step_module_is_named_like_a_standard_library_module(self):
+        # steps/ is first on sys.path when a step runs, so a module named like a standard library one would replace it.
+        self.assertEqual(sorted(p.stem for p in STEPS_DIR.glob("*.py") if p.stem in sys.stdlib_module_names), [])
 
 
 # Scaffolding that a step still inline in the workflow defines as its own copy, because an inline script cannot import

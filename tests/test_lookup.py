@@ -4,7 +4,7 @@ import json
 import time
 import unittest
 
-from harness import StubServer, closed_port_url, run_step
+from harness import ROOT, StubServer, closed_port_url, run_step, run_step_as_written
 
 TOKEN = "ghs_unitTestTokenThatMustNeverBePrinted0001"
 MEMBERSHIP_PATH = "/orgs/cipherstash/teams/developers/memberships/alice"
@@ -197,6 +197,15 @@ class GivenANameThatIsNotValid(LookupTest):
                 path = f"/orgs/{env['ORG']}/teams/{env['TEAM']}/memberships/{env['REQUESTER']}"
                 result = self.lookup({path: (200, json.dumps({"state": "active"}))}, **case)
                 self.assert_member(result, "member")
+
+
+class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
+    def test_the_run_line_starts_the_lookup_file(self):
+        env = inputs(TOKEN_OUTCOME="failure", APP_TOKEN="", STEP_FILE=str(ROOT / "steps" / "lookup.py"))
+        result = run_step_as_written("decide", "lookup", env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.outputs.get("membership"), "lookup-failed")
+        self.assertEqual(len(result.errors()), 1, result.stdout)
 
 
 if __name__ == "__main__":
