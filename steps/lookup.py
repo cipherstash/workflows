@@ -8,14 +8,12 @@ created it), ORG, TEAM, REQUESTER and the runner's GITHUB_API_URL and GITHUB_OUT
 Python's standard library only (3.10 features); tests/test_lookup.py runs this file.
 """
 
-import http.client
 import json
 import os
 import re
-import urllib.error
 import urllib.request
 
-from helpers import TIMEOUT_SECONDS, TotalTimeout, error, opener, output, total_time_limit
+from helpers import Unreachable, error, github_headers, output, send
 
 # The most of an answer's body that is read. A membership is far smaller; a larger answer is not one.
 MAX_BODY_BYTES = 64 * 1024
@@ -36,35 +34,14 @@ def api(path: str, token: str) -> tuple[int, bytes]:
     answer. The token is only ever a request header."""
     # The URL starts with the runner's GITHUB_API_URL, which no input can change.
     request = urllib.request.Request(  # noqa: S310
-        f"{os.environ['GITHUB_API_URL']}/{path}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
+        f"{os.environ['GITHUB_API_URL']}/{path}", headers=github_headers(token)
     )
-    result = None
     try:
-        with total_time_limit():
-            try:
-                with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-                    # Read with the time limit running: a 200's body is the membership, so one cut off is a
-                    # lookup-failed.
-                    result = (response.status, response.read(MAX_BODY_BYTES + 1))
-            except urllib.error.HTTPError as answer:
-                # The body of a status other than 200 is never used.
-                answer.close()
-                result = (answer.code, b"")
-    except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
-        if result is not None:  # The alarm came after the answer was complete.
-            return result
-        # URLError, timeouts, refused or dropped connections, a cut-off answer. Only the failure's kind is
-        # reported.
-        reason = getattr(failure, "reason", failure)
-        raise LookupFailed(
-            f"Could not reach GitHub to look up team membership ({type(reason).__name__})"
-        ) from None
-    return result
+        # Read with the time limit running: a 200's body is the membership, so one cut off is a lookup-failed. The body
+        # of a status other than 200 is never used.
+        return send(request, read_ok_bytes=MAX_BODY_BYTES + 1)
+    except Unreachable as failure:
+        raise LookupFailed(f"Could not reach GitHub to look up team membership ({failure.kind})") from None
 
 
 def look_up(token: str, org: str, team: str, requester: str) -> str:

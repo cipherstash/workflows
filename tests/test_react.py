@@ -1,13 +1,18 @@
 """The react job's reaction step: how each answer GitHub can give becomes a 👀 reaction, or a warning."""
 
 import json
-import pathlib
-import shutil
-import tempfile
 import time
 import unittest
 
-from harness import ROOT, StubServer, _yq, closed_port_url, run_step, run_step_as_written
+from harness import (
+    StubServer,
+    closed_port_url,
+    run_step,
+    run_step_as_written,
+    step_field,
+    step_file_copy,
+    step_file_path,
+)
 
 TOKEN = "ghs_unitTestReactionTokenThatMustNeverBePrinted0001"
 REPOSITORY = "cipherstash/example"
@@ -179,6 +184,7 @@ class GivenTheStepCannotReact(ReactTest):
         self.assertEqual(self.stub.requests, [])
 
 
+REACT = step_file_path("react", "reaction")
 NOT_CHECKED_OUT = (
     "Could not get the reaction's step files (checkout failed, or react.py or helpers.py missing); no 👀 reaction was "
     "added, but the review was still requested"
@@ -205,11 +211,8 @@ class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
         return result
 
     def run_with_helpers(self, helpers_source):
-        with tempfile.TemporaryDirectory() as temp:
-            shutil.copy(ROOT / "steps" / "react.py", temp)
-            if helpers_source is not None:
-                (pathlib.Path(temp) / "helpers.py").write_text(helpers_source, encoding="utf-8")
-            return self.run_as_written(pathlib.Path(temp) / "react.py")
+        with step_file_copy("react", "reaction", helpers_source) as step_file:
+            return self.run_as_written(step_file)
 
     def test_without_the_file_no_reaction_is_added_and_a_warning_says_why(self):
         result = self.run_as_written("/nonexistent/steps/react.py")
@@ -221,12 +224,12 @@ class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
     def test_a_failed_checkout_is_a_warning_without_a_reaction_even_if_a_file_is_there(self):
         for outcome in ("failure", "skipped", ""):
             with self.subTest(outcome=outcome):
-                result = self.run_as_written(ROOT / "steps" / "react.py", CHECKOUT_OUTCOME=outcome)
+                result = self.run_as_written(REACT, CHECKOUT_OUTCOME=outcome)
                 self.assertEqual(result.warnings(), [NOT_CHECKED_OUT])
 
     def test_with_the_file_the_step_runs_it(self):
         # An empty token stops the file before any request.
-        result = self.run_as_written(ROOT / "steps" / "react.py", GITHUB_TOKEN="")
+        result = self.run_as_written(REACT, GITHUB_TOKEN="")
         self.assertIn("GITHUB_TOKEN is empty", result.warnings()[0])
 
     def test_missing_helpers_are_a_warning_without_a_reaction(self):
@@ -238,7 +241,7 @@ class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
         self.assertIn("the shared helper module could not be loaded", result.warnings()[0])
 
     def run_checked_out(self, status):
-        env = inputs(STEP_FILE=str(ROOT / "steps" / "react.py"), CHECKOUT_OUTCOME="success")
+        env = inputs(STEP_FILE=str(REACT), CHECKOUT_OUTCOME="success")
         with StubServer({REACTIONS_PATH: (status, "{}")}) as stub:
             result = run_step_as_written("react", "reaction", env, api_url=stub.url, repository=REPOSITORY)
         self.assertEqual(len(stub.requests), 1)
@@ -259,8 +262,7 @@ class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
         self.assertNotEqual(result.warnings(), [NOT_CHECKED_OUT])
 
     def test_a_failed_step_does_not_turn_the_check_red(self):
-        query = '.jobs.react.steps[] | select(.id == "reaction") | ."continue-on-error"'
-        self.assertEqual(_yq(query).strip(), "true")
+        self.assertEqual(step_field("react", "reaction", '."continue-on-error"'), "true")
 
 
 if __name__ == "__main__":

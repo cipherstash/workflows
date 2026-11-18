@@ -1,6 +1,6 @@
 # Checks every pull request to this repository, and every push to main: lints and audits the workflows and the example
-# callers, checks the workflow lockfile, lints and type-checks the Python, and runs the request decision's saved cases
-# and the unit tests of the reusable workflow's Python steps on Python 3.10, 3.12 and 3.14.
+# callers, checks the workflow lockfile, lints and type-checks the Python, runs the request decision's saved cases, and
+# runs the unit tests of the reusable workflow's Python steps on Python 3.10, 3.12 and 3.14.
 name: Checks
 
 on:
@@ -129,11 +129,12 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: '"$RUNNER_TEMP/python-checks/bin/mypy"'
 
-  # Runs both test seams on each Python version a GitHub-hosted Ubuntu runner may provide: the request decision's
-  # saved cases (and the check of their test script) and the unit tests of the reusable workflow's Python steps. 3.10
-  # is the oldest the steps support, and 3.14 covers the runner's own python3, whatever ubuntu-latest provides. jq
-  # and yq are the ones preinstalled on ubuntu-latest, which setup-python leaves on the PATH. The tests need nothing
-  # installed and no network beyond 127.0.0.1.
+  # Runs both test seams: the unit tests of the reusable workflow's Python steps on each Python version a GitHub-hosted
+  # Ubuntu runner may provide, and the request decision's saved cases (and the check of their test script), which use
+  # only bash and jq, once, in the leg the matrix marks with saved-cases. 3.10 is the oldest the steps support, and
+  # 3.14 covers the runner's own python3, whatever ubuntu-latest provides. jq and yq are the ones preinstalled on
+  # ubuntu-latest, which setup-python leaves on the PATH. The tests need nothing installed and no network beyond
+  # 127.0.0.1.
   tests:
     name: tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -144,6 +145,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.10', '3.12', '3.14']
+        include:
+          - python-version: '3.14'
+            saved-cases: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -157,9 +161,10 @@ jobs:
           jq --version
           yq --version
       - name: Check the saved cases' test script
+        if: ${{ matrix.saved-cases }}
         run: request-decision/test-runner
       - name: Run the saved cases
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.saved-cases }}
         run: request-decision/test
       - name: Run the unit tests
         if: ${{ !cancelled() }}

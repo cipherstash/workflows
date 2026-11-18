@@ -19,7 +19,7 @@ shopt -s nullglob
 for case_dir in "$cases_dir"/*/; do
   name="$(basename "$case_dir")"
   total=$((total + 1))
-  if ! actual="$(jq --compact-output --from-file "$program" "$case_dir/input.json" | jq --sort-keys .)"; then
+  if ! actual="$(jq --sort-keys --from-file "$program" "$case_dir/input.json")"; then
     echo "FAIL $name: the decision exited with an error"
     failed=$((failed + 1))
     continue

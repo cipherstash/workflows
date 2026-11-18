@@ -9,17 +9,14 @@ decision) and the runner's GITHUB_API_URL and GITHUB_REPOSITORY.
 Python's standard library only (3.10 features); tests/test_react.py runs this file.
 """
 
-import http.client
 import json
 import os
 import re
-import signal
 import sys
-import urllib.error
 import urllib.request
 
 try:
-    from helpers import TIMEOUT_SECONDS, TotalTimeout, opener, total_time_limit, warning
+    from helpers import Unreachable, github_headers, send, warning
 except Exception as failure:  # noqa: BLE001 A broken helper module is still only a warning, like any other failure.
     print(
         f"::warning::Could not add the 👀 reaction: the shared helper module could not be loaded "
@@ -56,36 +53,16 @@ def post(url: str, token: str) -> int:
         url,
         data=json.dumps({"content": "eyes"}, separators=(",", ":")).encode("utf-8"),
         method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-        },
+        headers={**github_headers(token), "Content-Type": "application/json"},
     )
-    status = None
     try:
-        with total_time_limit():
-            try:
-                with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-                    # The status is the whole answer: the time limit ends as soon as it is known, and the body is not
-                    # read, so nothing after this can turn a 201 into a warning.
-                    status = response.status
-                    signal.setitimer(signal.ITIMER_REAL, 0)
-            except urllib.error.HTTPError as answer:
-                status = answer.code
-                signal.setitimer(signal.ITIMER_REAL, 0)
-                answer.close()
-    except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
-        if status is None:
-            # URLError, timeouts, refused or dropped connections, an answer cut off before its status. Only the
-            # failure's kind is reported.
-            reason = getattr(failure, "reason", failure)
-            raise NotReacted(
-                f"Could not reach GitHub to add the 👀 reaction ({type(reason).__name__}); the review was still "
-                "requested"
-            ) from None
-        # The status arrived; only closing the answer failed, so the status stands.
+        # The status is the whole answer: the time limit ends as soon as it is known, and the body is not read, so
+        # nothing after this can turn a 201 into a warning.
+        status, _ = send(request)
+    except Unreachable as failure:
+        raise NotReacted(
+            f"Could not reach GitHub to add the 👀 reaction ({failure.kind}); the review was still requested"
+        ) from None
     return status
 
 
