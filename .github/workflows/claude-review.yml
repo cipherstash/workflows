@@ -10,8 +10,8 @@
 #     forks and deleted forks are skipped, and so is a pull request whose author is not a team member. A pull request
 #     opened by the review agent is reviewed without a membership lookup.
 #   Comment command: a team member's new pull request comment whose first line is `@<review agent> review`, on drafts
-#     and forks too. The rest of the comment is passed on as instructions. Comments by bots and by the review agent are
-#     skipped without a lookup.
+#     and forks too. The rest of the comment is passed on as instructions, and the comment gets a 👀 reaction once the
+#     request is sent. Comments by bots and by the review agent are skipped without a lookup.
 name: Claude review
 
 on:
@@ -338,8 +338,12 @@ jobs:
     concurrency:
       group: claude-review-${{ github.repository }}-${{ fromJSON(needs.decide.outputs.decision).pull_request.number }}
       cancel-in-progress: false
+    outputs:
+      # "true" only when the routine trigger accepted the request.
+      sent: ${{ steps.send.outputs.sent }}
     steps:
       - name: Fire the code-review routine
+        id: send
         # The review is advisory: a failed request (an outage, a revoked token) shows as a failed step in this run, not
         # as a red check on the pull request.
         continue-on-error: true
@@ -368,3 +372,44 @@ jobs:
             -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
             -H "Content-Type: application/json" \
             -d "$body" <<<"Authorization: Bearer $CLAUDE_ROUTINE_TOKEN"
+          echo "sent=true" >>"$GITHUB_OUTPUT"
+
+  # Adds a 👀 reaction to a comment command once its request has been sent, so the requester knows it was received.
+  # This is the only job that holds a write permission, and it sees only the decision. Reacting to a pull request's
+  # conversation comment uses the issue-comment reactions endpoint, which GitHub documents as needing "Issues: write".
+  # The calling job must grant `issues: write`, because a reusable workflow's jobs cannot hold more than their caller.
+  react:
+    needs: [decide, fire]
+    if: needs.fire.outputs.sent == 'true' && fromJSON(needs.decide.outputs.decision).react == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: React to the comment
+        # A missing reaction is cosmetic: it shows as a warning, never as a red check.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DECISION: ${{ needs.decide.outputs.decision }}
+        run: |
+          # jq reads the id, so a large number keeps every digit.
+          COMMENT_ID="$(jq --raw-output '.comment_id // ""' <<<"$DECISION")"
+          # The id goes into the URL, so anything but a number is refused.
+          if ! [[ "$COMMENT_ID" =~ ^[0-9]+$ ]]; then
+            echo "::warning::Could not react to the comment: its id is not a number"
+            exit 1
+          fi
+          # The token goes in on standard input, never on curl's command line.
+          status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 -X POST \
+            --output "$RUNNER_TEMP/reaction.json" --write-out '%{http_code}' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID/reactions" \
+            -H @- \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d '{"content":"eyes"}' <<<"Authorization: Bearer $GITHUB_TOKEN" || true)"
+          # 201 adds the reaction; 200 means it was already there.
+          if [[ "$status" != 200 && "$status" != 201 ]]; then
+            echo "::warning::Could not add the 👀 reaction to comment $COMMENT_ID (HTTP $status); the review was still requested. Check that the calling job grants issues: write"
+            exit 1
+          fi
