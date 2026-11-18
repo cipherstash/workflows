@@ -138,10 +138,10 @@ Every pull request, and every push to `main`, runs these checks:
 - `actionlint` over the workflows in this repository and the example callers in `examples/`.
 - `python-checks`, which runs Ruff and mypy over every Python file in this repository. See [Linting and type checking](#linting-and-type-checking).
 - `tests`, once for each of Python 3.10, 3.12 and 3.14, which runs:
-  - the request decision's saved cases, run by `request-decision/test`.
-    It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
-  - a check of `request-decision/test` itself, run by `request-decision/test-runner`.
   - the unit tests of the Python steps, in `tests/`.
+  - in the Python 3.14 job only, because they use only `bash` and `jq`, the request decision's saved cases, run by `request-decision/test`.
+    It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
+  - in the same job, a check of `request-decision/test` itself, run by `request-decision/test-runner`.
 - `zizmor`, a security linter for GitHub Actions, over the workflows, the example callers in `examples/`, and `.github/dependabot.yml`.
 - `actions-lock`, which checks the workflow lockfile.
 
