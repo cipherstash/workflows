@@ -53,7 +53,11 @@ All three secrets, `CLAUDE_ROUTINE_TOKEN`, `CLAUDE_REVIEW_APP_ID` and `CLAUDE_RE
 A run has two jobs:
 
 - `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. A line break in a reason is flattened to a space, so a reason cannot start a workflow command. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
-- `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
+- `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error, but the job and the check stay green. The error says what is known about the request:
+  - `Could not reach the routine trigger (<kind>); no review was requested`: the connection was refused, the name did not resolve, or another failure came before the request went out. A re-run is safe.
+  - `The routine trigger did not answer in time (<kind>); the request may have been received, so check for a review before re-running`: no answer within the time limit.
+  - `The routine trigger dropped the connection (<kind>); the request may have been received, so check for a review before re-running`: the connection closed after the request was sent. In both of these cases the routine may already have accepted the request, so a re-run could review twice.
+  - `The routine trigger answered HTTP <status>; no review was requested`: an error status or a redirect.
   If the job could not check out its step file, nothing is sent, and the run shows an error, but the check stays green.
 
 `fire` holds no permissions.
