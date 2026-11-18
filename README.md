@@ -177,12 +177,13 @@ The code for these steps is in the `steps/` directory:
 | `steps/report.py` | The last step of the `decide` job. It passes on the decision, or the `decision-failed` skip, and writes the summary line. |
 | `steps/fire.py` | The request to the routine trigger, in the `fire` job. |
 | `steps/react.py` | The 👀 reaction, in the `react` job. |
-| `steps/helpers.py` | Code every step shares: the time limits, the redirect blocker, annotations, step outputs and hiding a token. |
+| `steps/helpers.py` | Code every step shares: sending one request within the time limits without following a redirect, GitHub API headers, annotations, step outputs and hiding a token. |
 
 The `decide` job checks out `steps/` with the request decision, as described above.
 The `fire` and `react` jobs check out `steps/` in the same way, because a job cannot see another job's files.
 Each of these checkouts is the step that comes first in its job, and a test checks that they all use the same settings.
-Each Python step names its file in its `env` as `STEP_FILE`, and its short `bash` script runs that file with the runner's `python3`.
+Each job names its checkout in its `env` as `WORKFLOW_FILES`.
+Each Python step names its file there in its `env` as `STEP_FILE`, and its short `bash` script runs that file with the runner's `python3`.
 If the report's file was not checked out, the step still writes the `decision-failed` skip, an error and the summary line by itself.
 If the routine call's file was not checked out, the step sends nothing and shows an error.
 If the reaction's file or the helper module was not checked out, or the helper module cannot be loaded, the step adds no reaction and shows a warning.
@@ -204,10 +205,10 @@ Every pull request, and every push to `main`, runs these checks:
 - `actionlint` over the workflows in this repository and the example callers in `examples/`.
 - `python-checks`, which runs Ruff and mypy over every Python file in this repository. See [Linting and type checking](#linting-and-type-checking).
 - `tests`, once for each of Python 3.10, 3.12 and 3.14, which runs:
-  - the request decision's saved cases, run by `request-decision/test`.
-    It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
-  - a check of `request-decision/test` itself, run by `request-decision/test-runner`.
   - the unit tests of the Python steps, in `tests/`.
+  - in the Python 3.14 job only, because they use only `bash` and `jq`, the request decision's saved cases, run by `request-decision/test`.
+    It fails if a case is missing a file, if a file is not valid JSON, or if there are no cases at all.
+  - in the same job, a check of `request-decision/test` itself, run by `request-decision/test-runner`.
 - `zizmor`, a security linter for GitHub Actions, over the workflows, the example callers in `examples/`, and `.github/dependabot.yml`.
 - `actions-lock`, which checks the workflow lockfile.
 
@@ -251,6 +252,9 @@ No Python code is read out of the workflow.
 
 1. Add a test method to the step's test file, such as `tests/test_lookup.py` or `tests/test_react.py`. Name it for what the step does, such as `test_a_pending_membership_is_not_a_member`.
 2. Run the unit tests and check the new test passes.
+
+Every Python step runs from a file in `steps/`, so none keeps its own copy of the shared code.
+`tests/test_python_steps.py` fails if a step in the workflow runs Python inline, with a Python `shell:`.
 
 To add a new Python step:
 

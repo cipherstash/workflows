@@ -8,16 +8,13 @@ id), DECISION (the request decision) and the runner's GITHUB_OUTPUT.
 Python's standard library only (3.10 features); tests/test_fire.py runs this file.
 """
 
-import http.client
 import json
 import os
 import re
-import signal
 import sys
-import urllib.error
 import urllib.request
 
-from helpers import TIMEOUT_SECONDS, TotalTimeout, error, opener, output, redacted, total_time_limit
+from helpers import Unreachable, error, output, redacted, send
 
 # The routine API's address. It is fixed here: no input or event field can change where the token goes. Only the tests
 # replace it, with a stand-in server's.
@@ -58,34 +55,13 @@ def post(url: str, token: str, body: bytes) -> tuple[int, bytes]:
             "Content-Type": "application/json",
         },
     )
-    status = None
-    answer_body = b""
     try:
-        with total_time_limit():
-            try:
-                with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-                    # opener.open returns only a 2xx answer, so the routine trigger has accepted the request and a
-                    # session may have started. The time limit ends as soon as the status is known, and the body is
-                    # not read, so nothing after this can make an accepted request look not sent.
-                    status = response.status
-                    signal.setitimer(signal.ITIMER_REAL, 0)
-            except urllib.error.HTTPError as answer:
-                status = answer.code
-                try:
-                    # Read with the time limit running, for the excerpt in the error annotation.
-                    answer_body = answer.read(4096)
-                finally:
-                    answer.close()
-    except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
-        if status is None:
-            # URLError, timeouts, refused or dropped connections, an answer cut off before its status. Only the
-            # failure's kind is reported.
-            reason = getattr(failure, "reason", failure)
-            raise NotSent(
-                f"Could not reach the routine trigger ({type(reason).__name__}); no review was requested"
-            ) from None
-        # The status arrived; only the rest of the answer failed or ran out of time, so the status stands.
-    return status, answer_body
+        # Only a 2xx answer's status is waited for: the routine trigger has accepted the request and a session may have
+        # started, so the body is not read and nothing after the status can make an accepted request look not sent. An
+        # error answer's body is read for the excerpt in the error annotation.
+        return send(request, read_error_bytes=4096)
+    except Unreachable as failure:
+        raise NotSent(f"Could not reach the routine trigger ({failure.kind}); no review was requested") from None
 
 
 def fire(token: str, trigger_id: str, decision: str) -> None:

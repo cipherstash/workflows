@@ -15,11 +15,13 @@ the Python jq wrapper.
 StubServer is a GitHub API stand-in on 127.0.0.1, answering each path with the status and body a test gives it.
 """
 
+import contextlib
 import email.message
 import functools
 import http.server
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 import sys
@@ -30,21 +32,27 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "claude-review.yml"
 # Where the step files live in this repository.
 STEPS_DIR = ROOT / "steps"
-# Where the workflow checks out this repository, in the job's workspace.
+# Where the workflow checks out this repository, in the job's workspace. Each job that checks it out names that
+# directory in its env as WORKFLOW_FILES, and a step names a file in it from there.
 CHECKOUT_PATH = ".cipherstash-workflows"
-WORKSPACE_PREFIX = "${{ github.workspace }}/"
-
-# The shell an inline Python step would name. There are none: python_steps finds any, so a test can refuse them.
-PYTHON_SHELL = "python3 {0}"
+WORKFLOW_FILES = f"${{{{ github.workspace }}}}/{CHECKOUT_PATH}"
+WORKFLOW_FILES_PREFIX = "${{ env.WORKFLOW_FILES }}/"
 
 
+@functools.cache
 def _yq(query):
+    """yq's raw output for query over the workflow, which the tests only read, so each query runs once."""
     result = subprocess.run(["yq", "-r", query, str(WORKFLOW)], capture_output=True, text=True, check=True)
     return result.stdout
 
 
 def _step_query(job, step_id):
     return f'.jobs.{job}.steps[] | select(.id == "{step_id}")'
+
+
+def step_field(job, step_id, path):
+    """yq's raw output for path (such as .with.path or ."continue-on-error") in the step, without its line break."""
+    return _yq(f"{_step_query(job, step_id)} | {path}").strip()
 
 
 class StepResult:
@@ -107,17 +115,6 @@ def step_script(job, step_id):
     return script, shell
 
 
-def python_steps():
-    """(job, step id) for every step of the workflow written inline in Python, with shell: python3 {0}. There should
-    be none."""
-    steps = []
-    for job in _yq(".jobs | keys | .[]").split():
-        for step_id in _yq(f'.jobs.{job}.steps[] | select(.shell == "{PYTHON_SHELL}") | .id').split("\n"):
-            if step_id:
-                steps.append((job, step_id))
-    return steps
-
-
 @functools.cache
 def file_steps():
     """(job, step id) for every step of the workflow that runs a step file, named by its env's STEP_FILE."""
@@ -129,27 +126,51 @@ def file_steps():
     return tuple(steps)
 
 
-def python_steps_without_id():
-    """The names of the Python steps that have no id, which python_steps and file_steps cannot list and the tests
-    cannot find."""
+def file_steps_without_id():
+    """The names of the steps that run a step file but have no id, which file_steps cannot list and the tests cannot
+    find."""
     names: list[str] = []
     for job in _yq(".jobs | keys | .[]").split():
-        query = (
-            f'.jobs.{job}.steps[] | select((.shell == "{PYTHON_SHELL}" or .env.STEP_FILE != null) and .id == null)'
-            ' | (.name // "(unnamed)")'
-        )
+        query = f'.jobs.{job}.steps[] | select(.env.STEP_FILE != null and .id == null) | (.name // "(unnamed)")'
         names.extend(line for line in _yq(query).split("\n") if line)
     return names
+
+
+def step_shells():
+    """The shell every step of the workflow names, or "" for the default."""
+    return _yq('.jobs[].steps[] | (.shell // "")').splitlines()
+
+
+def checked_out_file(job, step_id, name):
+    """The file, in this repository, that the step's env value name gives as a path in the job's WORKFLOW_FILES."""
+    value = _yq(_step_query(job, step_id) + f' | .env.{name} // ""').strip()
+    job_files = _yq(f'.jobs.{job}.env.WORKFLOW_FILES // ""').strip()
+    if job_files != WORKFLOW_FILES or not value.startswith(WORKFLOW_FILES_PREFIX):
+        raise LookupError(
+            f"step {step_id!r} in job {job!r} has no {name} in {CHECKOUT_PATH}: {value!r}, "
+            f"with WORKFLOW_FILES {job_files!r}"
+        )
+    return ROOT / value[len(WORKFLOW_FILES_PREFIX):]
 
 
 @functools.cache
 def step_file_path(job, step_id):
     """The step file, in this repository, that the step's STEP_FILE names in the workflow's checkout."""
-    value = _yq(_step_query(job, step_id) + ' | .env.STEP_FILE // ""').strip()
-    prefix = f"{WORKSPACE_PREFIX}{CHECKOUT_PATH}/"
-    if not value.startswith(prefix):
-        raise LookupError(f"step {step_id!r} in job {job!r} has no STEP_FILE in {CHECKOUT_PATH}: {value!r}")
-    return ROOT / value[len(prefix):]
+    return checked_out_file(job, step_id, "STEP_FILE")
+
+
+@contextlib.contextmanager
+def step_file_copy(job, step_id, helpers_source=None):
+    """Copies the step's file into a temporary directory of its own and yields the copy's path, for a step whose
+    checkout is partial or broken: helpers_source, if given, is written beside it as helpers.py, which is otherwise
+    missing."""
+    with tempfile.TemporaryDirectory() as temp:
+        step_file = step_file_path(job, step_id)
+        copy = pathlib.Path(temp) / step_file.name
+        shutil.copy(step_file, copy)
+        if helpers_source is not None:
+            (copy.parent / "helpers.py").write_text(helpers_source, encoding="utf-8")
+        yield copy
 
 
 @functools.cache
@@ -172,9 +193,8 @@ def run_step(job, step_id, env, api_url="http://127.0.0.1:9", repository="cipher
     undeclared = set(env) - step_env_names(job, step_id)
     if undeclared:
         raise AssertionError(f"step {step_id!r} does not declare env {sorted(undeclared)}")
-    if (job, step_id) not in file_steps():
-        raise AssertionError(f"step {step_id!r} in job {job!r} names no step file in its env as STEP_FILE")
-    # The step file and every module beside it, which the step may import.
+    # The step file and every module beside it, which the step may import. step_file_path raises for a step that
+    # names no step file.
     step_file = step_file_path(job, step_id)
     sources = {path.name: path.read_text(encoding="utf-8") for path in step_file.parent.glob("*.py")}
     main = step_file.name
@@ -354,7 +374,7 @@ class StubServer:
         self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._server.daemon_threads = True
         self.url = f"http://127.0.0.1:{self._server.server_address[1]}"
-        self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.005}, daemon=True)
 
     def __enter__(self):
         self._thread.start()

@@ -59,8 +59,8 @@ jobs:
       # The report step always writes a decision. The fallback is the decision-failed skip, in case it could not.
       decision: ${{ steps.final.outputs.decision || '{"decision":"skip","reason":"decision-failed"}' }}
     env:
-      # The request decision's jq program, from this repository's checkout (the checkout step below).
-      REQUEST_DECISION_FILE: ${{ github.workspace }}/.cipherstash-workflows/request-decision/decision.jq
+      # Where the checkout step below puts this repository's files: the request decision and the step files.
+      WORKFLOW_FILES: ${{ github.workspace }}/.cipherstash-workflows
     steps:
       # A reusable workflow runs in the calling repository, so the request decision and the Python step files are
       # checked out from this repository at the commit the caller pinned: job.workflow_repository and job.workflow_sha
@@ -89,6 +89,8 @@ jobs:
         env:
           REVIEW_AGENT: ${{ inputs.review-agent }}
           CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          # The request decision's jq program, from this repository's checkout.
+          REQUEST_DECISION_FILE: ${{ env.WORKFLOW_FILES }}/request-decision/decision.jq
         run: |
           # Without the checked-out decision there is nothing to run: this step fails, and the decision-failed skip
           # stands.
@@ -110,11 +112,8 @@ jobs:
           }
           decision="$(jq --compact-output --from-file "$REQUEST_DECISION_FILE" "$request")"
           requester="$(jq --raw-output '.requester // ""' <<<"$decision")"
-          if [[ "$(jq --raw-output '.decision' <<<"$decision")" == lookup ]]; then
-            needs_lookup=true
-          else
-            needs_lookup=false
-          fi
+          # "true" or "false".
+          needs_lookup="$(jq '.decision == "lookup"' <<<"$decision")"
           output decision "$decision"
           output requester "$requester"
           # The later steps test this one output, not the decision's text.
@@ -144,7 +143,7 @@ jobs:
           REQUESTER: ${{ steps.first.outputs.requester }}
           # The lookup's file, from this repository's checkout. Python's standard library only (3.10 features), so
           # nothing is installed; tests/test_lookup.py runs this file.
-          STEP_FILE: ${{ github.workspace }}/.cipherstash-workflows/steps/lookup.py
+          STEP_FILE: ${{ env.WORKFLOW_FILES }}/steps/lookup.py
         # Membership is never assumed: anything but a clear answer from GitHub is "lookup-failed", which skips. If the
         # file cannot be run, the membership output is missing, and the next step treats that as "lookup-failed".
         run: python3 "$STEP_FILE"
@@ -155,6 +154,7 @@ jobs:
         continue-on-error: true
         env:
           MEMBERSHIP: ${{ steps.lookup.outputs.membership || 'lookup-failed' }}
+          REQUEST_DECISION_FILE: ${{ env.WORKFLOW_FILES }}/request-decision/decision.jq
         run: |
           # Writes one step output. A random delimiter makes any value safe, even one with a newline in it.
           output() {
@@ -177,7 +177,7 @@ jobs:
           SECOND: ${{ steps.second.outputs.decision }}
           # The report's file, from this repository's checkout. Python's standard library only (3.10 features), so
           # nothing is installed; tests/test_report.py runs this file.
-          STEP_FILE: ${{ github.workspace }}/.cipherstash-workflows/steps/report.py
+          STEP_FILE: ${{ env.WORKFLOW_FILES }}/steps/report.py
         # Without the checked-out file (the checkout failed), this step does by itself what the file does when no
         # decision finished: it writes the decision-failed skip, an error and the summary line.
         run: |
@@ -210,6 +210,9 @@ jobs:
     outputs:
       # "true" only when the routine trigger accepted the request.
       sent: ${{ steps.send.outputs.sent }}
+    env:
+      # Where the checkout step below puts this repository's step files.
+      WORKFLOW_FILES: ${{ github.workspace }}/.cipherstash-workflows
     steps:
       # The routine call's step file, checked out from this repository at the commit the caller pinned, the same way
       # as in the decide job: only the steps/ directory, no credentials kept, and skipped if either value is empty.
@@ -239,7 +242,7 @@ jobs:
           CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
           # The routine call's file, from this repository's checkout. Python's standard library only (3.10 features), so
           # nothing is installed; tests/test_fire.py runs this file.
-          STEP_FILE: ${{ github.workspace }}/.cipherstash-workflows/steps/fire.py
+          STEP_FILE: ${{ env.WORKFLOW_FILES }}/steps/fire.py
         # Without the checked-out files (the checkout failed, or fire.py or its helper module is missing), nothing is sent:
         # the step reports one error and fails, which continue-on-error keeps from turning the check red. The helper is
         # checked here because fire.py imports it before it can report anything itself.
@@ -263,6 +266,9 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write
+    env:
+      # Where the checkout step below puts this repository's step files.
+      WORKFLOW_FILES: ${{ github.workspace }}/.cipherstash-workflows
     steps:
       # The reaction's step file, checked out from this repository at the commit the caller pinned, the same way as
       # in the decide job: only the steps/ directory, no credentials kept, and skipped if either value is empty.
@@ -290,7 +296,7 @@ jobs:
           CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
           # The reaction's file, from this repository's checkout. Python's standard library only (3.10 features), so
           # nothing is installed; tests/test_react.py runs this file.
-          STEP_FILE: ${{ github.workspace }}/.cipherstash-workflows/steps/react.py
+          STEP_FILE: ${{ env.WORKFLOW_FILES }}/steps/react.py
         # Without a successful checkout of the file and the helper module beside it, no reaction is added: the step
         # shows a warning and fails, which continue-on-error keeps from turning the check red. The file reports each of
         # its own failures, a broken helper module included, as one warning, so its exit status is the step's.

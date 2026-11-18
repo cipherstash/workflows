@@ -12,7 +12,7 @@ import json
 import os
 from typing import Any
 
-from helpers import output
+from helpers import error, output
 
 FAILED = '{"decision":"skip","reason":"decision-failed"}'
 
@@ -52,10 +52,10 @@ try:
     value = os.environ.get("SECOND") or os.environ.get("FIRST") or ""
     decision = finished(value)
     if decision is None:
-        print("::error::The request decision did not finish; no review was requested", flush=True)
+        error("The request decision did not finish; no review was requested")
         value, decision = FAILED, json.loads(FAILED)
     if decision.get("reason") == "membership-lookup-failed":
-        print("::error::Team membership could not be checked, so no review was requested", flush=True)
+        error("Team membership could not be checked, so no review was requested")
     # Passed on as the decision step wrote it.
     output("decision", value)
     line = summary(decision)
@@ -63,5 +63,5 @@ try:
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as file:
         file.write(line + "\n")
 except Exception as failure:  # noqa: BLE001 The decision-failed skip, written first, stands.
-    print(f"::error::Could not report the request decision ({type(failure).__name__})", flush=True)
+    error(f"Could not report the request decision ({type(failure).__name__})")
 
