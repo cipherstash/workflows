@@ -28,6 +28,20 @@ def gate($requester; $fire):
 # GitHub logins are not case-sensitive.
 def is_review_agent($login): ($login // "" | ascii_downcase) as $l | $l != "" and $l == (.review_agent // "" | ascii_downcase);
 
+# Gates a person: the comment's author or the review request's sender, who must be a team member. A payload with no
+# person is not one this decision can act on. Bots and the review agent are skipped before any lookup, so automation
+# cannot start a review, and a review that mentions the agent cannot start another. The ready path does not use this:
+# it fires for the review agent without a lookup.
+def gate_person($p; $fire):
+  if $p == null then skip("not-a-review-request")
+  elif $p.type == "Bot" then skip("bot")
+  elif is_review_agent($p.login) then skip("review-agent")
+  else gate($p.login; $fire)
+  end;
+
+# A pull request whose head is a fork, or a fork that was deleted (its head repository is then null).
+def fork($pr): $pr.head.repo == null or $pr.head.repo.full_name != $pr.base.repo.full_name;
+
 # The fire decision for a review request. The text names the kind, from the kind itself: the first line says which
 # pull request to review, the second says why the review was requested. Only a comment command gets a reaction.
 # Runs on the decision's input, for the repository name in the event.
@@ -52,7 +66,7 @@ def ready:
   | if $pr.user == null then skip("not-a-review-request")
     elif $pr.draft == true then skip("draft")
     elif $pr.user.type == "Bot" then skip("bot")
-    elif $pr.head.repo == null or $pr.head.repo.full_name != $pr.base.repo.full_name then skip("fork")
+    elif fork($pr) then skip("fork")
     elif is_review_agent($pr.user.login) then $fire
     else gate($pr.user.login; $fire)
     end;
@@ -106,10 +120,7 @@ def comment_command:
     # A closed (or merged) pull request is not reviewed. Checked after the command match, so an ordinary comment
     # on one is still not-a-command, and before the author checks, so no lookup is made.
     elif $issue.state == "closed" then skip("closed")
-    elif $comment.user == null then skip("not-a-review-request")
-    elif $comment.user.type == "Bot" then skip("bot")
-    elif is_review_agent($comment.user.login) then skip("review-agent")
-    else gate($comment.user.login; $fire)
+    else gate_person($comment.user; $fire)
     end;
 
 # Requested reviewer: the review agent requested, as a user, in a pull request's Reviewers box. A request for any
@@ -125,11 +136,8 @@ def requested_reviewer:
   | request("requested-reviewer"; $sender.login; $pr.number; $pr.html_url) as $fire
   | if is_review_agent(.event.requested_reviewer.login) | not then skip("not-a-review-request")
     elif $pr.state == "closed" then skip("closed")
-    elif $pr.head.repo == null or $pr.head.repo.full_name != $pr.base.repo.full_name then skip("fork")
-    elif $sender == null then skip("not-a-review-request")
-    elif $sender.type == "Bot" then skip("bot")
-    elif is_review_agent($sender.login) then skip("review-agent")
-    else gate($sender.login; $fire)
+    elif fork($pr) then skip("fork")
+    else gate_person($sender; $fire)
     end;
 
 if .event_name == "pull_request" and (.event.action | IN("opened", "reopened", "ready_for_review"))
