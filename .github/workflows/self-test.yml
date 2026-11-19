@@ -88,17 +88,18 @@ jobs:
   # command, which the review workflow takes on drafts too.
   #
   # For a comment, the condition is a filter only, and lets through nothing the review workflow would skip as not a
-  # comment command, so a red test always means something: the first line must be `@cipherstash-agent review`
-  # followed by the end of the comment, a space, a tab or a line break (startsWith and == ignore case, as the review
-  # workflow does). This holds for ASCII text. GitHub does not document how it compares other letters, so such a
-  # comment could pass here and then end the run red with not-a-command. A command with other spacing, such as two
-  # spaces, is a command to the review workflow but is not tested. fromJSON gives the tab and line breaks, which an
-  # expression's string cannot hold. Comments by bots and by the review agent (the stub's reply among them) and comments on closed pull requests start no job, because
-  # the review workflow skips them. There is no author_association test, as in examples/claude-review.yml: a team
-  # member whose organisation membership is private shows as CONTRIBUTOR or NONE and would be skipped silently. The
-  # review workflow decides, and checks team membership, so a non-member's command starts a run that ends red with
-  # not-a-team-member, by design. A comment's payload does not say whether the pull request comes from a fork, and
-  # the review workflow takes comment commands on forks, so they are tested: nothing from the fork is checked out or run.
+  # comment command, so a red test always means something: the first line must be `@cipherstash-agent review` followed
+  # by the end of the comment, a space, a tab or a line break (startsWith and == ignore case, as the review workflow
+  # does). This holds for ASCII text. GitHub does not document how it compares other letters, so such a comment could
+  # pass here and then end the run red with not-a-command. A command with other spacing, such as two spaces, is a
+  # command to the review workflow but is not tested. fromJSON gives the tab and line breaks, which an expression's
+  # string cannot hold. Comments by bots and by the review agent (the stub's reply among them) and comments on closed
+  # pull requests start no job, because the review workflow skips them. There is no author_association test, as in
+  # examples/claude-review.yml: a team member whose organisation membership is private shows as CONTRIBUTOR or NONE and
+  # would be skipped silently. The review workflow decides, and checks team membership, so a non-member's command starts
+  # a run that ends red with not-a-team-member, by design. A comment's payload does not say whether the pull request
+  # comes from a fork, and the review workflow takes comment commands on forks, so they are tested: nothing from the
+  # fork is checked out or run.
   review:
     if: >-
       (github.event_name == 'pull_request'
