@@ -35,18 +35,20 @@ jobs:
     # The mention must match the shared workflow's `review-agent` input: change it here too if you change that input.
     # The author_association test is a performance filter only, so a comment from anyone else does not start a runner.
     # It is not the gate: the shared workflow's team membership check decides who may request a review.
-    # pull_request events, including reviewer requests, are not filtered here.
+    # A review request for any reviewer other than the review agent does not start the workflow. Other pull_request
+    # events are not filtered.
     if: >-
-      github.event_name != 'issue_comment' || (
+      (github.event_name != 'issue_comment' || (
       github.event.issue.pull_request
       && contains(github.event.comment.body, '@cipherstash-agent')
       && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
-      )
+      ))
+      && (github.event.action != 'review_requested' || github.event.requested_reviewer.login == 'cipherstash-agent')
     # The shared workflow's jobs can hold no more than this. Only its reaction job uses it, to add 👀 to a comment
     # command; its other jobs hold no permissions.
     permissions:
       issues: write
-    uses: cipherstash/workflows/.github/workflows/claude-review.yml@a5866f9990013456223d2a3ab3097a1370fd0d44 # feat/requested-reviewer (pre-release)
+    uses: cipherstash/workflows/.github/workflows/claude-review.yml@07d2f90959fcaf9d4fe64d1e9b50fe9b2a9bbac0 # feat/requested-reviewer (pre-release)
     with:
       routine-trigger-id: ${{ vars.CLAUDE_ROUTINE_TRIGGER_ID }}
     secrets:
