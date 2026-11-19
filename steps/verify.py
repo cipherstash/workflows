@@ -5,12 +5,13 @@ Passes only when a comment on the pull request, by the stub routine's account (R
 `integration-test: received` and this run attempt's link (`<server>/<repo>/actions/runs/<id>/attempts/<n>`), which the
 review request includes and the stub echoes back. Fails with one error annotation that says what went wrong: no
 account to expect, the review workflow decided not to request a review (naming the skip reason), the request was not
-sent, or no reply came within WAIT_SECONDS (saying how many comments were read and how many carried the marker and
-this attempt's link but came from another author).
+of the kind the event makes, the request was not sent, or no reply came within WAIT_SECONDS (saying how many comments
+were read and how many carried the marker and this attempt's link but came from another author).
 
-Inputs, all environment variables: DECISION and SENT (the review workflow's outputs), REPLY_AUTHOR (the login the stub
-routine posts as), GITHUB_TOKEN (the job's token, which only reads comments) and the runner's GITHUB_API_URL,
-GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_OUTPUT and GITHUB_STEP_SUMMARY.
+Inputs, all environment variables: DECISION and SENT (the review workflow's outputs), EVENT_ACTION (the action of the
+pull_request event that started the run), REPLY_AUTHOR (the login the stub routine posts as), GITHUB_TOKEN (the job's
+token, which only reads comments) and the runner's GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_SERVER_URL, GITHUB_RUN_ID,
+GITHUB_RUN_ATTEMPT, GITHUB_OUTPUT and GITHUB_STEP_SUMMARY.
 Python's standard library only (3.10 features); tests/test_verify.py runs this file.
 """
 
@@ -37,6 +38,13 @@ MAX_BODY_BYTES = 8 * 1024 * 1024
 
 # A run attempt's link, as the review workflow's decide job writes it and the request decision accepts it.
 RUN_URL = re.compile(r"https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+/attempts/[0-9]+")
+# The kind of review request each pull_request event the self-test runs on makes.
+KINDS = {
+    "opened": "ready",
+    "reopened": "ready",
+    "ready_for_review": "ready",
+    "review_requested": "requested-reviewer",
+}
 # HTTP statuses that reading the comments again cannot fix: the token or the pull request is wrong.
 REFUSED = (401, 403, 404)
 
@@ -83,8 +91,12 @@ def run_url() -> str:
     return url
 
 
-def requested_pull_request(decision: str, sent: str) -> int:
-    """The number of the pull request a review was requested for, or Failed if none was."""
+def requested_pull_request(decision: str, sent: str, action: str) -> int:
+    """The number of the pull request a review was requested for, or Failed if none was, or it was not the kind of
+    request the event makes."""
+    expected = KINDS.get(action)
+    if expected is None:
+        raise Failed(f"The self-test does not test a pull_request event with the action {action!r}")
     try:
         value: Any = json.loads(decision)
     except ValueError:
@@ -94,6 +106,12 @@ def requested_pull_request(decision: str, sent: str) -> int:
     if value["decision"] == "skip":
         reason = value.get("reason")
         raise Failed(f"The review workflow decided not to request a review ({reason}): see its decide job")
+    kind = value.get("kind")
+    if kind != expected:
+        raise Failed(
+            f"The review workflow decided to request a review of the wrong kind ({kind}): a {action} event makes a "
+            f"{expected} request. See its decide job"
+        )
     if sent != "true":
         raise Failed(
             "The review workflow decided to request a review, but the request was not sent to the stub routine: "
@@ -222,7 +240,9 @@ def report(reply: dict[str, Any]) -> None:
 try:
     author = reply_author()
     url = run_url()
-    number = requested_pull_request(os.environ.get("DECISION", ""), os.environ.get("SENT", ""))
+    number = requested_pull_request(
+        os.environ.get("DECISION", ""), os.environ.get("SENT", ""), os.environ.get("EVENT_ACTION", "")
+    )
     report(wait_for_reply(os.environ.get("GITHUB_TOKEN", ""), number, url, author))
 except Failed as failure:
     error(str(failure))
