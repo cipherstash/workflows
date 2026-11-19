@@ -13,7 +13,7 @@ The review request made when a non-draft pull request is opened or reopened, or 
 _Avoid_: auto review
 
 **Comment command**:
-The review request made by a member's comment whose first line starts with `@cipherstash-agent review`; the rest of the comment is the request's instructions.
+The review request made by a member's comment whose first line starts, with no leading whitespace, with `@cipherstash-agent review`; the rest of the comment is the request's instructions.
 _Avoid_: mention, slash command
 
 **Requested reviewer**:

@@ -70,6 +70,10 @@ class StepResult:
         """The messages of the ::error:: annotations the step printed."""
         return [line[len("::error::"):] for line in self.stdout.splitlines() if line.startswith("::error::")]
 
+    def warnings(self):
+        """The messages of the ::warning:: annotations the step printed."""
+        return [line[len("::warning::"):] for line in self.stdout.splitlines() if line.startswith("::warning::")]
+
     def everything(self):
         """All the text the step produced, for checking that a secret appears nowhere."""
         return "\n".join([self.stdout, self.stderr, self.output_file, self.summary])
@@ -254,6 +258,7 @@ def _run(command, env, api_url, timeout):
             "GITHUB_OUTPUT": str(output_path),
             "GITHUB_STEP_SUMMARY": str(summary_path),
             "GITHUB_API_URL": api_url,
+            "GITHUB_REPOSITORY": "cipherstash/example",
             "RUNNER_TEMP": str(runner_temp),
             **env,
         }

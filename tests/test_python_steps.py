@@ -15,8 +15,11 @@ class PythonStepsTest(unittest.TestCase):
         self.assertNotEqual(shells, [])
         self.assertEqual([shell for shell in shells if "python" in shell], [])
 
-    def test_the_lookup_the_report_and_the_routine_call_run_from_files(self):
-        self.assertLessEqual({("decide", "lookup"), ("decide", "final"), ("fire", "send")}, set(file_steps()))
+    def test_the_lookup_the_report_the_routine_call_and_the_reaction_run_from_files(self):
+        self.assertEqual(
+            set(file_steps()),
+            {("decide", "lookup"), ("decide", "final"), ("fire", "send"), ("react", "reaction")},
+        )
 
     def test_each_step_file_step_has_an_id_so_it_is_listed_and_checked(self):
         self.assertEqual(file_steps_without_id(), [])

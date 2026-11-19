@@ -5,11 +5,17 @@
 # the calling repository, so the decide job checks out the request decision, request-decision/decision.jq, and the
 # Python step files in steps/ from this repository at the commit the caller pinned. request-decision/test runs that same
 # jq file against saved cases, and the unit tests in tests/ run the same step files. The fire job checks out the step
-# files the same way and runs the routine call from steps/fire.py.
+# files the same way and runs the routine call from steps/fire.py, and the react job checks them out too and runs the
+# 👀 reaction from steps/react.py.
 #
-# Kinds of review request handled so far: Ready (a non-draft pull request opened or reopened, or a draft marked ready
-# for review). Drafts, bots' pull requests, forks and deleted forks are skipped, and so is a pull request whose author
-# is not a team member. A pull request opened by the review agent is reviewed without a membership lookup.
+# Kinds of review request handled so far:
+#   Ready: a non-draft pull request opened or reopened, or a draft marked ready for review. Drafts, bots' pull requests,
+#     forks and deleted forks are skipped, and so is a pull request whose author is not a team member. A pull request
+#     opened by the review agent is reviewed without a membership lookup.
+#   Comment command: a team member's new pull request comment whose first line is `@<review agent> review`, on drafts
+#     and forks too. The rest of the comment is passed on as instructions, and the comment gets a 👀 reaction once the
+#     request is sent. Comments by bots and by the review agent are skipped without a lookup, and so are commands on
+#     closed or merged pull requests.
 name: Claude review
 
 on:
@@ -24,7 +30,7 @@ on:
         type: string
         default: developers
       review-agent:
-        description: The login of the review agent, the account whose pull requests are reviewed without a membership lookup.
+        description: The login of the review agent, the account mentioned in a comment command, whose pull requests are reviewed without a membership lookup and whose comments never request a review.
         type: string
         default: cipherstash-agent
     secrets:
@@ -185,7 +191,8 @@ jobs:
           echo "Claude review: skipped (decision-failed)"
           echo "Claude review: skipped (decision-failed)" >>"$GITHUB_STEP_SUMMARY"
 
-  # Fires the routine trigger. It holds no permissions and sees only the decision, never the event's free text.
+  # Fires the routine trigger. It holds no permissions and sees only the decision: the event's free text reaches it only
+  # as the decision's text, which the send step's json module places in the request body.
   fire:
     needs: decide
     if: fromJSON(needs.decide.outputs.decision).decision == 'fire'
@@ -195,9 +202,14 @@ jobs:
     # One request per pull request at a time. A second waits rather than cancelling the first, whose request may already
     # have started a session; a third replaces the waiting one. This serialises only the fire request, not the review
     # session it starts, so sessions can overlap.
+    # Every kind of review request puts the pull request's number in the same place, so a Ready request and a comment
+    # command for one pull request share a group.
     concurrency:
       group: claude-review-${{ github.repository }}-${{ fromJSON(needs.decide.outputs.decision).pull_request.number }}
       cancel-in-progress: false
+    outputs:
+      # "true" only when the routine trigger accepted the request.
+      sent: ${{ steps.send.outputs.sent }}
     env:
       # Where the checkout step below puts this repository's step files.
       WORKFLOW_FILES: ${{ github.workspace }}/.cipherstash-workflows
@@ -239,4 +251,58 @@ jobs:
             exec python3 "$STEP_FILE"
           fi
           echo "::error::Could not get the routine call's step file (checkout failed or file missing); no review was requested"
+          exit 1
+
+  # Adds a 👀 reaction to a comment command once its request has been sent, so the requester knows it was received.
+  # This is the only job that holds a write permission, and it sees only the decision. Reacting to a pull request's
+  # conversation comment uses the issue-comment reactions endpoint, which GitHub documents as needing "Issues: write".
+  # The calling job must grant `issues: write`, because a reusable workflow's jobs cannot hold more than their caller.
+  # The checkout is given no contents permission. This relies on this repository being public, as for the decide and
+  # fire jobs, which hold no permissions at all; it is to be confirmed by the first live run (#20).
+  react:
+    needs: [decide, fire]
+    if: needs.fire.outputs.sent == 'true' && fromJSON(needs.decide.outputs.decision).react == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      # Where the checkout step below puts this repository's step files.
+      WORKFLOW_FILES: ${{ github.workspace }}/.cipherstash-workflows
+    steps:
+      # The reaction's step file, checked out from this repository at the commit the caller pinned, the same way as
+      # in the decide job: only the steps/ directory, no credentials kept, and skipped if either value is empty.
+      - name: Check out the step files
+        id: checkout
+        if: job.workflow_repository != '' && job.workflow_sha != ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .cipherstash-workflows
+          sparse-checkout: |
+            /steps/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: React to the comment
+        id: reaction
+        # A missing reaction is cosmetic: it shows as a warning, never as a red check.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DECISION: ${{ needs.decide.outputs.decision }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          # The reaction's file, from this repository's checkout. Python's standard library only (3.10 features), so
+          # nothing is installed; tests/test_react.py runs this file.
+          STEP_FILE: ${{ env.WORKFLOW_FILES }}/steps/react.py
+        # Without a successful checkout of the file and the helper module beside it, no reaction is added: the step
+        # shows a warning and fails, which continue-on-error keeps from turning the check red. The file reports each of
+        # its own failures, a broken helper module included, as one warning, so its exit status is the step's.
+        run: |
+          if [[ "$CHECKOUT_OUTCOME" == success && -f "$STEP_FILE" && -f "${STEP_FILE%/*}/helpers.py" ]]; then
+            exec python3 "$STEP_FILE"
+          fi
+          echo "::warning::Could not get the reaction's step files (checkout failed, or react.py or helpers.py missing); no 👀 reaction was added, but the review was still requested"
           exit 1
