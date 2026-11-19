@@ -1,0 +1,28 @@
+# Asks Claude for a code review of a pull request, using the shared workflow in cipherstash/workflows. Copy this file
+# to .github/workflows/claude-review.yml in a repository to add the review there.
+#
+# Reviews a non-draft pull request when it is opened or reopened, or when a draft is marked ready for review, if its
+# author is a member of the @cipherstash/developers team. The rules live in the shared workflow, pinned below by commit.
+#
+# Needs, as organisation or repository settings:
+#   secret CLAUDE_ROUTINE_TOKEN           the code-review routine's bearer token
+#   secret CLAUDE_REVIEW_APP_ID           the membership GitHub App's id
+#   secret CLAUDE_REVIEW_APP_PRIVATE_KEY  the membership GitHub App's private key
+#   variable CLAUDE_ROUTINE_TRIGGER_ID    the routine's trigger id (`trig_…`)
+name: Claude review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  review:
+    uses: cipherstash/workflows/.github/workflows/claude-review.yml@8d6d526be4a308acddf2b1cde6ce3a37b9458271 # feat/ready-review-requests (pre-release)
+    with:
+      routine-trigger-id: ${{ vars.CLAUDE_ROUTINE_TRIGGER_ID }}
+    secrets:
+      CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
+      CLAUDE_REVIEW_APP_ID: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
+      CLAUDE_REVIEW_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}

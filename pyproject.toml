@@ -1,0 +1,54 @@
+# Settings for Ruff and mypy, which the python-checks job in .github/workflows/checks.yml runs over all the Python in
+# this repository. This repository is not a Python package: this file holds tool settings only.
+
+[tool.ruff]
+# The reusable workflow's steps run on the runner's python3, and keep to Python 3.10.
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+# pycodestyle, Pyflakes and import order; bugbear, blind except and flake8-bandit for likely bugs and unsafe code;
+# pyupgrade for Python 3.10 idioms; Ruff's own rules, simplifications, comprehensions, unnecessary code; and Pylint's
+# error and warning rules.
+select = ["E", "W", "F", "I", "B", "BLE", "UP", "RUF", "SIM", "C4", "PIE", "S", "PLE", "PLW"]
+
+[tool.ruff.lint.per-file-ignores]
+# The tests run yq, git, bash, the test scripts and the step files as processes, found on the PATH, on purpose: that
+# is how the runner runs them (S603, S607). Their tokens are made-up values that the tests check never leak (S105,
+# S106).
+"tests/**" = ["S603", "S607", "S105", "S106"]
+
+[tool.mypy]
+# Checks every Python file in the repository (steps/, tests/ and any other) as written for Python 3.10, whichever
+# Python runs mypy. No directory is a package, so each file is a top-level module named after it, as when python3
+# runs it with its own directory first on the path.
+python_version = "3.10"
+files = ["."]
+# Checks the body of every function, typed or not.
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+# Strict by default, so a new step file, or any other new Python file, must be fully typed with no list to keep: mypy
+# then checks every call between them.
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+warn_return_any = true
+
+# The tests and their harness are not typed. mypy does not accept a partial wildcard such as "test_*" in a module
+# pattern, so each is named. A new test file that is not named here fails mypy, which says what to add.
+[[tool.mypy.overrides]]
+module = [
+    "harness",
+    "test_check_lock",
+    "test_decision_file",
+    "test_fire",
+    "test_helpers",
+    "test_lookup",
+    "test_python_steps",
+    "test_report",
+]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+warn_return_any = false

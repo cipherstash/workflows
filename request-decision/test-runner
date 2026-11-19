@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks that request-decision/test reports broken or missing cases as failures instead of passing or stopping early.
 #
-# Each check copies the test script into a temporary directory beside a stand-in decision that echoes its input, sets
+# Each check copies the test script into a temporary directory beside a stand-in decision.jq that echoes its input, sets
 # up the cases for that check, runs the test script, and compares its exit status and output with what is expected.
 # The stand-in keeps these checks about the test script alone, whatever the real decision does.
 #
@@ -18,8 +18,7 @@ new_copy() {
   local dir
   dir="$(mktemp -d "$work/copy.XXXXXX")"
   cp "$here/test" "$dir/"
-  printf '#!/usr/bin/env bash\nexec jq --compact-output .\n' >"$dir/decide"
-  chmod +x "$dir/decide"
+  echo '.' >"$dir/decision.jq"
   mkdir "$dir/cases"
   echo "$dir"
 }
@@ -28,7 +27,7 @@ new_copy() {
 add_good_case() {
   mkdir "$1/cases/good"
   echo '{"event_name": "push", "event": {}}' >"$1/cases/good/input.json"
-  "$1/decide" <"$1/cases/good/input.json" >"$1/cases/good/expected.json"
+  cp "$1/cases/good/input.json" "$1/cases/good/expected.json"
 }
 
 # check NAME COPY WANT_STATUS WANT_TEXT: runs the copy's test script and checks it exits with WANT_STATUS

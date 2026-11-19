@@ -1,0 +1,26 @@
+# Keeps the actions this repository's workflows use, and the pinned Python tools, up to date. When Dependabot bumps an action's pin, it also
+# regenerates that action's entry in the workflow lockfile, .github/workflows/actions.lock, in the same pull request.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Waits 7 days after a release before proposing it, so a bad or compromised release has time to be found and
+    # pulled first. Only default-days applies to GitHub Actions. Security updates are not delayed.
+    cooldown:
+      default-days: 7
+  # The hashed requirements files for Ruff, mypy and zizmor. Whether Dependabot regenerates their --hash lines is not
+  # confirmed, so check each pull request's hashes (see the README).
+  - package-ecosystem: "pip"
+    directory: "/.github/python-checks"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+  - package-ecosystem: "pip"
+    directory: "/.github/zizmor"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
