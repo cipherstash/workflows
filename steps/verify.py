@@ -49,7 +49,7 @@ MAX_BODY_BYTES = 8 * 1024 * 1024
 # A run attempt's link, as the review workflow's decide job writes it and the request decision accepts it.
 RUN_URL = re.compile(r"https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+/attempts/[0-9]+")
 # A comment's id, which goes into a URL, so anything but ASCII digits is refused.
-COMMENT_ID = re.compile(r"[0-9]+")
+COMMENT_ID_PATTERN = re.compile(r"[0-9]+")
 # The kind of review request each event the self-test runs on makes, by the event's name and action.
 KINDS = {
     ("pull_request", "opened"): "ready",
@@ -116,7 +116,7 @@ def reaction_author() -> str:
     return login
 
 
-def requested(decision: str, sent: str, name: str, action: str) -> tuple[int, dict[str, Any]]:
+def requested_pull_request(decision: str, sent: str, name: str, action: str) -> tuple[int, dict[str, Any]]:
     """The number of the pull request a review was requested for, and the decision, or Failed if none was, or it was
     not the kind of request the event makes."""
     expected = KINDS.get((name, action))
@@ -154,7 +154,7 @@ def triggering_comment(decision: dict[str, Any]) -> str:
     """The id of the comment that started this run, as digits, or Failed if it is not known or the decision is about
     another comment."""
     comment = os.environ.get("COMMENT_ID", "")
-    if not COMMENT_ID.fullmatch(comment):
+    if not COMMENT_ID_PATTERN.fullmatch(comment):
         raise Failed(
             "COMMENT_ID is empty or not a number, so the comment whose 👀 reaction to check is not known: "
             "set it to the id of the comment that started the run in the self-test workflow"
@@ -206,19 +206,27 @@ def reactions_page(token: str, comment: str, page: int) -> list[Any]:
     return listing_page(token, path, "the comment's reactions", "reactions")
 
 
-def find_reaction(token: str, comment: str, author: str, deadline: float, others: set[Any]) -> dict[str, Any] | None:
+def login_of(item: dict[str, Any]) -> str | None:
+    """The login of the account in the item's user field, or None if it has none or is not a string."""
+    user = item.get("user")
+    login = user.get("login") if isinstance(user, dict) else None
+    return login if isinstance(login, str) else None
+
+
+def find_reaction(
+    token: str, comment: str, author: str, deadline: float, ignored_ids: set[Any]
+) -> dict[str, Any] | None:
     """The first 👀 reaction on the comment by `author` (compared without regard to case). A 👀 by anyone else is
-    counted in others, by its id. Stops looking at the deadline, even part way through the pages."""
+    counted in ignored_ids, by its id. Stops looking at the deadline, even part way through the pages."""
     for page in range(1, MAX_PAGES + 1):
         reactions = reactions_page(token, comment, page)
         for found in reactions:
             if not isinstance(found, dict) or found.get("content") != REACTION:
                 continue
-            user = found.get("user")
-            login = user.get("login") if isinstance(user, dict) else None
-            if isinstance(login, str) and login.casefold() == author.casefold():
+            login = login_of(found)
+            if login is not None and login.casefold() == author.casefold():
                 return found
-            others.add(found.get("id", len(others)))
+            ignored_ids.add(found.get("id", len(ignored_ids)))
         if len(reactions) < PAGE_SIZE or time.monotonic() >= deadline:
             break
     return None
@@ -226,11 +234,11 @@ def find_reaction(token: str, comment: str, author: str, deadline: float, others
 
 def wait_for_reaction(token: str, comment: str, author: str) -> dict[str, Any]:
     deadline = time.monotonic() + REACTION_WAIT_SECONDS
-    others: set[Any] = set()
+    ignored_ids: set[Any] = set()
     problem = ""
     while True:
         try:
-            found = find_reaction(token, comment, author, deadline, others)
+            found = find_reaction(token, comment, author, deadline, ignored_ids)
             problem = ""
         except Unread as failure:
             found = None
@@ -243,27 +251,32 @@ def wait_for_reaction(token: str, comment: str, author: str) -> dict[str, Any]:
     message = (
         f"No 👀 reaction from @{author} on comment {comment} within {REACTION_WAIT_SECONDS:g} seconds, so the review "
         f"workflow did not acknowledge the comment command: see the warning in its react job. Of the comment's 👀 "
-        f"reactions, {len(others)} from other accounts were not counted"
+        f"reactions, {len(ignored_ids)} from other accounts were not counted"
     )
     if problem:
         message += f". The last read of the reactions failed: {problem}"
     raise Failed(message)
 
 
-def report_reaction(found: dict[str, Any], comment: str) -> None:
-    user = found.get("user")
-    login = user.get("login") if isinstance(user, dict) else None
-    who = f"@{login}" if isinstance(login, str) else "an unknown account"
-    text = f"The comment command, comment {comment}, has the 👀 reaction from {who}"
-    print(f"::notice title=Comment command reacted to::{escaped(text)}", flush=True)
+def write_summary(text: str, failure_note: str = "") -> None:
+    """Appends text to the job summary, if there is one. If it cannot be written, a warning says so, with failure_note
+    added."""
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         try:
             with open(summary, "a", encoding="utf-8") as file:
-                # The login is GitHub's, from the reaction, and goes in code formatting so it cannot add Markdown.
-                file.write(f"Self-test: the comment command, comment {comment}, has the 👀 reaction from `{who}`.\n\n")
+                file.write(text)
         except OSError as failure:
-            warning(f"Could not write the job summary ({type(failure).__name__})")
+            warning(f"Could not write the job summary ({type(failure).__name__}){failure_note}")
+
+
+def report_reaction(found: dict[str, Any], comment: str) -> None:
+    login = login_of(found)
+    who = f"@{login}" if login is not None else "an unknown account"
+    text = f"The comment command, comment {comment}, has the 👀 reaction from {who}"
+    print(f"::notice title=Comment command reacted to::{escaped(text)}", flush=True)
+    # The login is GitHub's, from the reaction, and goes in code formatting so it cannot add Markdown.
+    write_summary(f"Self-test: the comment command, comment {comment}, has the 👀 reaction from `{who}`.\n\n")
 
 
 def find_reply(
@@ -284,15 +297,14 @@ def find_reply(
             body = found.get("body")
             if not (isinstance(body, str) and MARKER in body and names_this_run.search(body)):
                 continue
-            user = found.get("user")
-            login = user.get("login") if isinstance(user, dict) else None
-            if isinstance(login, str) and login.casefold() == author.casefold():
+            login = login_of(found)
+            if login is not None and login.casefold() == author.casefold():
                 return found
             key = found.get("id", len(tally.ignored))
             if key not in tally.ignored:
                 tally.ignored.add(key)
                 # The login and the association come from the comment, so they are untrusted: escaped, and quoted.
-                who = f"@{login}" if isinstance(login, str) else "an unknown author"
+                who = f"@{login}" if login is not None else "an unknown author"
                 association = found.get("author_association")
                 print(
                     "::notice title=Reply ignored::"
@@ -338,27 +350,23 @@ def wait_for_reply(token: str, number: int, url: str, author: str) -> dict[str, 
 
 
 def report(reply: dict[str, Any]) -> None:
-    user = reply.get("user")
-    login = user.get("login") if isinstance(user, dict) else None
-    author = f"@{login}" if isinstance(login, str) else "an unknown author"
+    login = login_of(reply)
+    author = f"@{login}" if login is not None else "an unknown author"
     body = str(reply.get("body", ""))
     print(f"::notice title=Stub routine replied::{escaped(f'Reply from {author}: {body}')}", flush=True)
     # The summary is Markdown, not read as workflow commands. The fence is longer than any run of tildes in the reply.
     fence = "~" * max([3, *(len(run) + 1 for run in re.findall("~+", body))])
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        try:
-            with open(summary, "a", encoding="utf-8") as file:
-                file.write(f"Self-test: passed. The stub routine's reply, from {author}:\n\n{fence}\n{body}\n{fence}\n")
-        except OSError as failure:
-            # The reply was found, so the test passed; only its record is missing.
-            warning(f"Could not write the job summary ({type(failure).__name__}); the test passed")
+    # If the summary cannot be written, the reply was still found, so the test passed; only its record is missing.
+    write_summary(
+        f"Self-test: passed. The stub routine's reply, from {author}:\n\n{fence}\n{body}\n{fence}\n",
+        "; the test passed",
+    )
 
 
 try:
     author = reply_author()
     url = run_url()
-    number, decision = requested(
+    number, decision = requested_pull_request(
         os.environ.get("DECISION", ""),
         os.environ.get("SENT", ""),
         os.environ.get("EVENT_NAME", ""),

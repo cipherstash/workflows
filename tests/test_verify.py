@@ -275,7 +275,11 @@ class GivenACommentCommand(VerifyTest):
         routes = {REACTIONS_1: page(), PAGE_1: page(comment(COMMAND_REPLY))}
 
         def react_later():
-            time.sleep(0.2)
+            # Waits for the step's first read of the reactions, however long it takes to start, so that a read finds
+            # none. The overall limit is only so a broken step cannot hang the test.
+            limit = time.monotonic() + 30
+            while REACTIONS_1 not in stub.paths() and time.monotonic() < limit:
+                time.sleep(0.01)
             routes[REACTIONS_1] = page(reaction())
 
         with StubServer(routes) as stub:
