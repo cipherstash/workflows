@@ -41,7 +41,9 @@ The instructions are trimmed and capped at 2,000 characters; longer instructions
 They go after the request's fixed text, in a block marked as data from the requester, so they cannot replace the routine's own instructions.
 
 Once the request is sent, the comment gets a 👀 reaction, so the requester knows it was received.
-No reaction means no request was sent: the comment was not a command, its author is not a team member, the pull request is closed, the request failed, or a newer request for the same pull request replaced this one while it was still waiting to send (see `concurrency` below).
+A 👀 means the request was sent. No 👀 usually means it was not: the comment was not a command, its author is not a team member, the pull request is closed, the request failed, or a newer request for the same pull request replaced this one while it was still waiting to send (see `concurrency` below). But a request that was sent can also end without a 👀 if adding the reaction failed, and that looks the same, so check the run to be sure.
+
+Punctuation straight after `review`, as in `@cipherstash-agent review!`, means the comment is not a command, and it is ignored without any message. Put a space or a new line after `review`.
 
 A failed request never turns a pull request's checks red.
 It shows as an error in the workflow run instead.
@@ -60,6 +62,7 @@ The reusable workflow still checks every rule itself.
 For comments, the `if:` also lets through only commenters whose `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`.
 This is a performance filter only, so a comment from anyone else does not start a runner.
 It is not the gate: the reusable workflow's team membership check decides who may request a review.
+One caveat: GitHub reports `MEMBER` only for people whose membership of the organisation is public, or when the token can see private members. A team member whose membership is private may be shown as `CONTRIBUTOR` or `NONE`, and then their comment does not start a run at all, even though they are on the team. Such a person can make their membership public, or the repository can remove the `author_association` test from the example's `if:`.
 Ready events are not filtered.
 If you change the `review-agent` input, change the `@cipherstash-agent` in the `if:` to match.
 
