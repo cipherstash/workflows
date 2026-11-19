@@ -49,7 +49,6 @@ class ReactTest(unittest.TestCase):
                 "reaction",
                 inputs(**overrides),
                 api_url=api_url or stub.url,
-                repository=REPOSITORY,
                 substitutions=substitutions,
             )
         self.stub = stub
@@ -70,13 +69,11 @@ class ReactTest(unittest.TestCase):
 
 
 class GivenGitHubAddsTheReaction(ReactTest):
-    def test_a_new_reaction_is_success(self):
-        result = self.react({REACTIONS_PATH: (201, json.dumps({"id": 1, "content": "eyes"}))})
-        self.assert_reacted(result)
-
-    def test_a_reaction_that_was_already_there_is_success(self):
-        result = self.react({REACTIONS_PATH: (200, json.dumps({"id": 1, "content": "eyes"}))})
-        self.assert_reacted(result)
+    def test_a_new_reaction_and_one_already_there_are_success(self):
+        for status in (201, 200):
+            with self.subTest(status=status):
+                result = self.react({REACTIONS_PATH: (status, json.dumps({"id": 1, "content": "eyes"}))})
+                self.assert_reacted(result)
 
     def test_a_reaction_whose_answer_never_ends_is_success(self):
         # The status says the reaction is there, so the step does not wait for the rest of the answer.
@@ -201,7 +198,6 @@ class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
         with StubServer({REACTIONS_PATH: (201, "{}")}) as stub:
             result = run_step_as_written(
                 "react", "reaction", env, api_url=stub.url,
-                repository=REPOSITORY,
             )
         self.assertEqual(stub.requests, [], "a reaction was attempted")
         self.assertNotIn(TOKEN, result.everything())
@@ -227,11 +223,6 @@ class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
                 result = self.run_as_written(REACT, CHECKOUT_OUTCOME=outcome)
                 self.assertEqual(result.warnings(), [NOT_CHECKED_OUT])
 
-    def test_with_the_file_the_step_runs_it(self):
-        # An empty token stops the file before any request.
-        result = self.run_as_written(REACT, GITHUB_TOKEN="")
-        self.assertIn("GITHUB_TOKEN is empty", result.warnings()[0])
-
     def test_missing_helpers_are_a_warning_without_a_reaction(self):
         result = self.run_with_helpers(None)
         self.assertEqual(result.warnings(), [NOT_CHECKED_OUT])
@@ -243,7 +234,7 @@ class GivenTheStepAsTheWorkflowWritesIt(unittest.TestCase):
     def run_checked_out(self, status):
         env = inputs(STEP_FILE=str(REACT), CHECKOUT_OUTCOME="success")
         with StubServer({REACTIONS_PATH: (status, "{}")}) as stub:
-            result = run_step_as_written("react", "reaction", env, api_url=stub.url, repository=REPOSITORY)
+            result = run_step_as_written("react", "reaction", env, api_url=stub.url)
         self.assertEqual(len(stub.requests), 1)
         self.assertEqual(result.errors(), [])
         return result

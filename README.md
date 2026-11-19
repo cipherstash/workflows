@@ -41,7 +41,9 @@ The instructions are trimmed and capped at 2,000 characters; longer instructions
 They go after the request's fixed text, in a block marked as data from the requester, so they cannot replace the routine's own instructions.
 
 Once the request is sent, the comment gets a 👀 reaction, so the requester knows it was received.
-No reaction means no request was sent: the comment was not a command, its author is not a team member, the pull request is closed, the request failed, or a newer request for the same pull request replaced this one while it was still waiting to send (see `concurrency` below).
+A 👀 means the request was sent. No 👀 usually means it was not: the comment was not a command, its author is not a team member, the pull request is closed, the request failed, or a newer request for the same pull request replaced this one while it was still waiting to send (see `concurrency` below). But a request that was sent can also end without a 👀 if adding the reaction failed, and that looks the same, so check the run to be sure.
+
+Punctuation straight after `review`, as in `@cipherstash-agent review!`, means the comment is not a command, and it is ignored without any message. Put a space or a new line after `review`.
 
 **Requested reviewer**: a team member requests a review from `cipherstash-agent` in a pull request's Reviewers box.
 
@@ -81,6 +83,7 @@ The reusable workflow still checks every rule itself.
 For comments, the `if:` also lets through only commenters whose `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`.
 This is a performance filter only, so a comment from anyone else does not start a runner.
 It is not the gate: the reusable workflow's team membership check decides who may request a review.
+One caveat: GitHub reports `MEMBER` only for people whose membership of the organisation is public, or when the token can see private members. A team member whose membership is private may be shown as `CONTRIBUTOR` or `NONE`, and then their comment does not start a run at all, even though they are on the team. Such a person can make their membership public, or the repository can remove the `author_association` test from the example's `if:`.
 `pull_request` events, Ready and requested reviewer alike, are not filtered.
 If you change the `review-agent` input, change the `@cipherstash-agent` in the `if:` to match.
 
@@ -266,7 +269,7 @@ The `tests` check runs them on Python 3.10, 3.12 and 3.14.
 
 `tests/harness.py` runs one step of the reusable workflow on its own:
 
-- `run_step(job, step_id, env, api_url=..., repository=...)` runs the step's file from `steps/` with `python3`, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`), its `::error::` annotations (`.errors()`) and its `::warning::` annotations (`.warnings()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`, `GITHUB_API_URL` (`api_url`) and `GITHUB_REPOSITORY` (`repository`).
+- `run_step(job, step_id, env, api_url=...)` runs the step's file from `steps/` with `python3`, and returns what it left: its exit code, standard output and error, its outputs (`.outputs`), its summary (`.summary`), its `::error::` annotations (`.errors()`) and its `::warning::` annotations (`.warnings()`). The step sees only the `env` the test gives it, which must be names the step declares in its `env`, plus the runner's own variables, such as `GITHUB_OUTPUT`, `GITHUB_API_URL` (`api_url`) and `GITHUB_REPOSITORY`, which is always `cipherstash/example`.
 - `StubServer(routes)` stands in for GitHub's API or the routine trigger. `routes` maps a path to a status and body (and, optionally, headers to add, such as a redirect's `Location`), to `StubServer.HANG` for an answer that never comes, to `StubServer.DROP` for a connection closed without one, or to `StubServer.drip(status)` for an answer whose body never ends, for `GET` and `POST` alike. It records every request's method, path and headers in `.requests`, and its body in `.bodies`.
 - `substitutions` replaces text in the step's code before it runs, such as a timeout constant lowered so a test does not wait, or the routine API's fixed address swapped for the stand-in server's. For a step file, the code includes `steps/helpers.py`. Each piece of text must appear exactly once in all of it. The files in `steps/` are not changed: the harness runs a changed copy.
 - `run_step_as_written(job, step_id, env)` runs a step's `run` script exactly as the workflow writes it, with `bash`. It checks what a step does around its file, such as when the file was not checked out.
