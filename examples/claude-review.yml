@@ -4,7 +4,8 @@
 # Reviews a non-draft pull request when it is opened or reopened, or when a draft is marked ready for review, if its
 # author is a member of the @cipherstash/developers team. A team member can also ask for a review, on drafts too, by
 # commenting on a pull request with a first line starting `@cipherstash-agent review`; the rest of the comment is passed
-# on as instructions, and the comment gets a 👀 reaction once the request is sent. The rules live in the shared
+# on as instructions, and the comment gets a 👀 reaction once the request is sent. A team member can also request a
+# review from cipherstash-agent in a pull request's Reviewers box, on drafts too. The rules live in the shared
 # workflow, pinned below by commit.
 #
 # Comments run this file from the default branch, so the comment command works only once this file is merged there.
@@ -18,7 +19,7 @@ name: Claude review
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review, review_requested]
   # zizmor flags issue_comment because anyone who can comment can start this workflow. Accepted: the shared
   # workflow acts only on a comment command from a team member, checked by its decide job, and never runs code from
   # the pull request.
@@ -34,17 +35,20 @@ jobs:
     # The mention must match the shared workflow's `review-agent` input: change it here too if you change that input.
     # There is no filter on the commenter's author_association: GitHub reports a team member whose organisation
     # membership is private as CONTRIBUTOR or NONE, so such a filter would silently skip their commands. The shared
-    # workflow's team membership check is the gate, and the mention is the only filter here.
+    # workflow's team membership check is the gate, and the mention is the only filter on comments.
+    # A review request for any reviewer other than the review agent does not start the workflow. Other pull_request
+    # events are not filtered.
     if: >-
-      github.event_name != 'issue_comment' || (
+      (github.event_name != 'issue_comment' || (
       github.event.issue.pull_request
       && contains(github.event.comment.body, '@cipherstash-agent')
-      )
+      ))
+      && (github.event.action != 'review_requested' || github.event.requested_reviewer.login == 'cipherstash-agent')
     # The shared workflow's jobs can hold no more than this. Only its reaction job uses it, to add 👀 to a comment
     # command; its other jobs hold no permissions.
     permissions:
       issues: write
-    uses: cipherstash/workflows/.github/workflows/claude-review.yml@df5be8a738f610c493737454f2e66ef847fc376f # feat/comment-command (pre-release)
+    uses: cipherstash/workflows/.github/workflows/claude-review.yml@07d2f90959fcaf9d4fe64d1e9b50fe9b2a9bbac0 # feat/requested-reviewer (pre-release)
     with:
       routine-trigger-id: ${{ vars.CLAUDE_ROUTINE_TRIGGER_ID }}
     secrets:

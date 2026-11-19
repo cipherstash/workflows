@@ -13,7 +13,7 @@ The words this repository uses, such as *review request* and *team member*, are 
 [`.github/workflows/claude-review.yml`](.github/workflows/claude-review.yml) is a reusable workflow.
 It decides whether an event is a review request from a team member and, if it is, fires the Claude code-review routine trigger for that pull request.
 
-So far it handles two kinds of review request.
+It handles these kinds of review request.
 
 **Ready**: a non-draft pull request opened or reopened, or a draft marked ready for review.
 It skips drafts, pull requests from bots, and pull requests from forks, including deleted forks.
@@ -45,6 +45,27 @@ A 👀 means the request was sent. No 👀 usually means it was not: the comment
 
 Punctuation straight after `review`, as in `@cipherstash-agent review!`, means the comment is not a command, and it is ignored without any message. Put a space or a new line after `review`.
 
+**Requested reviewer**: a team member requests a review from `cipherstash-agent` in a pull request's Reviewers box.
+
+- The requester is the person who made the request (the event's sender), not the pull request's author, and must be a team member.
+- Only a request for the review agent itself counts, matched ignoring case. A request for any other person, or for a team, does nothing.
+- Requests made by bots, and by the review agent itself, never request a review, and no membership check is made for them.
+- A review request that GitHub makes by itself, such as one from a CODEOWNERS file, may have a sender that is not a person. A bot sender is skipped as `bot`, and a payload with no sender is skipped as `not-a-review-request`. Any other sender is treated as the requester and must be a team member.
+- It works on drafts, because asking is explicit.
+- It does nothing on a closed or merged pull request.
+- It does nothing on a pull request from a fork, including a deleted fork. GitHub does not give a fork's `pull_request` events the repository's secrets, so the membership check could never succeed. On a fork, use the comment command instead.
+- Every request fires. To ask again, remove `cipherstash-agent` from the reviewers and request it again, or use the comment command.
+- Once the review agent has posted a review, the re-request button in the Reviewers box should also send a new request. This is expected, but it has not been tried yet.
+- There is no reaction and no instructions. To add instructions, use the comment command.
+
+GitHub does not let you request a pull request's author as its reviewer.
+So on pull requests that `cipherstash-agent` opened, only Ready and the comment command can request a review.
+
+If a pull request is opened with `cipherstash-agent` already requested as a reviewer, GitHub may send both the `opened` event and the review request.
+So the pull request can get two reviews.
+To get one review, open the pull request without requesting the agent, or request it later.
+This is possible, not confirmed.
+
 A failed request never turns a pull request's checks red.
 It shows as an error in the workflow run instead.
 
@@ -53,21 +74,22 @@ It shows as an error in the workflow run instead.
 Copy [`examples/claude-review.yml`](examples/claude-review.yml) to `.github/workflows/claude-review.yml` in the repository.
 It pins the reusable workflow to a full commit SHA, with the version in a comment.
 
-The example listens to `pull_request` (opened, reopened and ready for review) and `issue_comment` (created) events.
+The example listens to `pull_request` (opened, reopened, ready for review and review requested) and `issue_comment` (created) events.
+A caller copied before the requested reviewer kind existed needs `review_requested` added to its `pull_request` types.
 Its workflow-level permissions are empty, and its calling job grants only `issues: write`, which the reaction needs: a reusable workflow's jobs can never hold more permissions than the job that calls them.
 Only the reusable workflow's `react` job uses that permission; its other jobs hold none.
-The calling job also has an `if:` that starts the reusable workflow only for comments on pull requests that mention `@cipherstash-agent`, to save starting runners for every other comment.
+The calling job also has an `if:` that starts the reusable workflow only for comments on pull requests that mention `@cipherstash-agent`, and for review requests for `cipherstash-agent`, to save starting runners for every other comment and request.
 The reusable workflow still checks every rule itself.
 
 For comments, the mention is the only filter: the `if:` does not look at the commenter's `author_association`.
 GitHub reports `MEMBER` only for people whose membership of the organisation is public, or when the token can see private members, so a team member whose membership is private shows as `CONTRIBUTOR` or `NONE`, and a filter on the association would skip their comment command without any run or message.
 The reusable workflow's team membership check is the gate that decides who may request a review; a comment from anyone else starts a run that ends without a request (see `not-a-team-member` below).
-Ready events are not filtered.
+For `review_requested` events, the `if:` also lets through only requests for `cipherstash-agent`, so a request for another reviewer does not start the workflow. Other `pull_request` events are not filtered.
 If you change the `review-agent` input, change the `@cipherstash-agent` in the `if:` to match.
 
 GitHub runs `issue_comment` workflows from the repository's default branch, not from the pull request's branch.
 So the comment command works only once the caller is merged into the default branch.
-A pull request that adds the caller can test the Ready path, but not the comment command.
+A pull request that adds the caller can test the Ready path and the requested reviewer, but not the comment command.
 
 The caller needs these settings, which CipherStash sets once for the whole organisation:
 
@@ -79,7 +101,7 @@ The caller needs these settings, which CipherStash sets once for the whole organ
 | `CLAUDE_ROUTINE_TRIGGER_ID` | variable | The routine's trigger id, which starts `trig_`. |
 
 The membership GitHub App is installed on the organisation with only the "Members: read" permission.
-The workflow uses it to get a short-lived token and look up whether the requester (the pull request's author, or the comment's author) is in the team.
+The workflow uses it to get a short-lived token and look up whether the requester (the pull request's author, the comment's author, or the person who requested the review agent as a reviewer) is in the team.
 
 ### Inputs and secrets
 
@@ -102,7 +124,7 @@ A run has up to three jobs:
   - `The routine trigger dropped the connection (<kind>); the request may have been received, so check for a review before re-running`: the connection closed after the request was sent. In both of these cases the routine may already have accepted the request, so a re-run could review twice.
   - `The routine trigger answered HTTP <status>; no review was requested`: an error status or a redirect.
   If the job could not check out its step file, nothing is sent, and the run shows an error, but the check stays green.
-- `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, and only once `fire` has sent the request. It sends the reaction once, with no retry, and does not follow a redirect. HTTP `201` (added) or `200` (already there) counts as reacted. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
+- `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, never for Ready or a requested reviewer, and only once `fire` has sent the request. It sends the reaction once, with no retry, and does not follow a redirect. HTTP `201` (added) or `200` (already there) counts as reacted. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
   If the job could not check out its step file, no reaction is added, and the run shows a warning, but the check stays green. A failed checkout also prints its own error annotation, which is not a red check.
 
 `decide` and `fire` hold no permissions.
@@ -138,7 +160,7 @@ Exactly one of:
 - `{"decision": "skip", "reason": "<reason>"}`: no review.
 - `{"decision": "lookup", "requester": "<login>"}`: look up whether the requester is a team member, then run the decision again with `membership` set. Only returned when `membership` is `null`.
 - `{"decision": "fire", "kind": "<kind>", "requester": "<login>", "pull_request": {"number": <n>, "url": "<url>"}, "react": <true or false>, "text": "<request text>"}`: fire the routine trigger with `{"text": <text>}`, then add the 👀 reaction if `react` is `true`.
-  `kind` is `ready` or `comment-command`.
+  `kind` is `ready`, `comment-command` or `requested-reviewer`.
   A comment command's decision also has `comment_id`, the comment to react to, and `instructions`, the comment's instructions or `null` if it has none. Only a comment command reacts.
   The text starts with two paragraphs: `Review pull request #<n> in <owner/repo>: <url>`, then `Kind of review request: <kind>.`, which names the kind of review request.
   A comment command with instructions adds a third paragraph:
@@ -156,18 +178,16 @@ Exactly one of:
 
 | Reason | When |
 | --- | --- |
-| `not-a-review-request` | The event is not a kind of review request, such as a push to a pull request (`synchronize`), a comment on an issue rather than a pull request, or an edited or deleted comment. |
+| `not-a-review-request` | The event is not a review request, or has no author, comment author or sender to act as the requester (a payload whose `user` or `sender` is `null`). For example a push to a pull request (`synchronize`), a comment on an issue rather than a pull request, an edited or deleted comment, or a review requested from someone other than the review agent or from a team. |
 | `not-a-command` | A new pull request comment whose first line is not a comment command. |
-| `closed` | A comment command on a closed pull request, which includes a merged one. Checked after the command match and before the author checks, so no membership lookup is made. |
-| `draft` | The pull request is a draft (Ready only). |
-| `bot` | The pull request's author (Ready) or the comment's author (comment command) is a bot. No membership lookup is made. |
-| `review-agent` | The comment command's author is the review agent. No membership lookup is made. |
-| `fork` | The pull request comes from a fork, or from a fork that was deleted. |
+| `closed` | The request is on a closed pull request, which includes a merged one. Checked before the requester checks, so no membership lookup is made. A comment is checked for the command first. |
+| `draft` | The pull request is a draft. Only Ready skips drafts. |
+| `bot` | The requester is a bot. No membership lookup is made. |
+| `review-agent` | The requester is the review agent. No membership lookup is made. Ready does not skip this: it reviews the agent's own pull requests. |
+| `fork` | The pull request comes from a fork, or from a fork that was deleted. Comment commands are not skipped for this. |
 | `not-a-team-member` | The requester is not an active member of the team. |
 | `membership-lookup-failed` | Team membership could not be checked: GitHub could not be reached within 30 seconds, answered with an error status or a redirect (the lookup does not follow redirects), or gave an answer that is malformed or larger than 64 KiB. The run shows an error. |
 | `decision-failed` | The decision itself could not be checked out or run, or did not finish. The workflow adds this reason itself, not the `jq` program. The run shows an error. |
-
-An event that has no pull request or comment author, such as a payload whose `user` is `null`, is skipped as `not-a-review-request`.
 
 ## Python steps
 

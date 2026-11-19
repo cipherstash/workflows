@@ -8,7 +8,7 @@
 # files the same way and runs the routine call from steps/fire.py, and the react job checks them out too and runs the
 # 👀 reaction from steps/react.py.
 #
-# Kinds of review request handled so far:
+# Kinds of review request:
 #   Ready: a non-draft pull request opened or reopened, or a draft marked ready for review. Drafts, bots' pull requests,
 #     forks and deleted forks are skipped, and so is a pull request whose author is not a team member. A pull request
 #     opened by the review agent is reviewed without a membership lookup.
@@ -16,6 +16,9 @@
 #     and forks too. The rest of the comment is passed on as instructions, and the comment gets a 👀 reaction once the
 #     request is sent. Comments by bots and by the review agent are skipped without a lookup, and so are commands on
 #     closed or merged pull requests.
+#   Requested reviewer: a team member requests a review from the review agent in a pull request's Reviewers box, on
+#     drafts too. Requests for anyone else or for a team are skipped, as are requests made by bots or the review agent
+#     (without a lookup), and requests on closed pull requests or forks.
 name: Claude review
 
 on:
@@ -30,7 +33,7 @@ on:
         type: string
         default: developers
       review-agent:
-        description: The login of the review agent, the account mentioned in a comment command, whose pull requests are reviewed without a membership lookup and whose comments never request a review.
+        description: The login of the review agent, the account mentioned in a comment command or requested as a reviewer, whose pull requests are reviewed without a membership lookup and whose comments and reviewer requests never request a review.
         type: string
         default: cipherstash-agent
     secrets:
