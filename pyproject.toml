@@ -28,12 +28,28 @@ files = ["."]
 check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
-
-# The step files, which are what the reusable workflow runs, are fully typed so that mypy checks every call between
-# them. A new step file is added to this list.
-[[tool.mypy.overrides]]
-module = ["fire", "helpers", "lookup", "react", "report"]
+# Strict by default, so a new step file, or any other new Python file, must be fully typed with no list to keep: mypy
+# then checks every call between them.
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_calls = true
 warn_return_any = true
+
+# The tests and their harness are not typed. mypy does not accept a partial wildcard such as "test_*" in a module
+# pattern, so each is named. A new test file that is not named here fails mypy, which says what to add.
+[[tool.mypy.overrides]]
+module = [
+    "harness",
+    "test_check_lock",
+    "test_decision_file",
+    "test_fire",
+    "test_helpers",
+    "test_lookup",
+    "test_react",
+    "test_python_steps",
+    "test_report",
+]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+warn_return_any = false

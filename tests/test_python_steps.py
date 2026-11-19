@@ -1,7 +1,6 @@
 """Every Python step in the reusable workflow: the rules that hold for all of them."""
 
 import ast
-import re
 import sys
 import unittest
 
@@ -31,15 +30,6 @@ class PythonStepsTest(unittest.TestCase):
         for path in sorted(STEPS_DIR.glob("*.py")):
             with self.subTest(file=path.name):
                 ast.parse(path.read_text(encoding="utf-8"), filename=str(path), feature_version=(3, 10))
-
-    def test_every_step_file_is_in_the_fully_typed_mypy_override(self):
-        # pyproject.toml lists the fully typed step modules in a mypy override, and mypy does not fail on a step file
-        # missing from that list, so a new untyped step would pass CI. tomllib is not in Python 3.10, hence the regex.
-        text = (STEPS_DIR.parent / "pyproject.toml").read_text(encoding="utf-8")
-        listed = re.search(r"^module\s*=\s*\[([^\]]*)\]", text, re.MULTILINE)
-        if listed is None:
-            self.fail("pyproject.toml has no `module = [...]` mypy override")
-        self.assertEqual(set(re.findall(r'"([^"]+)"', listed.group(1))), {p.stem for p in STEPS_DIR.glob("*.py")})
 
     def test_steps_is_flat(self):
         # The harness and the checkout test list steps/*.py only, so a subdirectory with Python in it would go untested.

@@ -115,14 +115,18 @@ All three secrets, `CLAUDE_ROUTINE_TOKEN`, `CLAUDE_REVIEW_APP_ID` and `CLAUDE_RE
 A run has up to three jobs:
 
 - `decide` reads the event and decides. It writes a one-line summary, such as `Claude review: skipped (draft)`, to the run's summary page. A line break in a reason is flattened to a space, so a reason cannot start a workflow command. It does not fail: every step that can fail is allowed to, and the decision then becomes a skip with the reason `decision-failed`.
-- `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error giving the HTTP status, but the job and the check stay green.
+- `fire` sends the request to the routine trigger. It runs only when `decide` decided to fire. It sends the request once, with no retry, and does not follow a redirect. Only a `2xx` answer counts as sent. A failed request shows as a failed step with an error, but the job and the check stay green. The error says what is known about the request:
+  - `Could not reach the routine trigger (<kind>); no review was requested`: the connection was refused, the name did not resolve, or another failure came before the request went out. A re-run is safe.
+  - `The routine trigger did not answer in time (<kind>); the request may have been received, so check for a review before re-running`: no answer within the time limit.
+  - `The routine trigger dropped the connection (<kind>); the request may have been received, so check for a review before re-running`: the connection closed after the request was sent. In both of these cases the routine may already have accepted the request, so a re-run could review twice.
+  - `The routine trigger answered HTTP <status>; no review was requested`: an error status or a redirect.
   If the job could not check out its step file, nothing is sent, and the run shows an error, but the check stays green.
 - `react` adds the 👀 reaction to a comment command's comment. It runs only for a comment command, never for Ready or a requested reviewer, and only once `fire` has sent the request. It sends the reaction once, with no retry, and does not follow a redirect. HTTP `201` (added) or `200` (already there) counts as reacted. If the reaction cannot be added, the run shows a warning, but the job and the check stay green.
   If the job could not check out its step file, no reaction is added, and the run shows a warning, but the check stays green. A failed checkout also prints its own error annotation, which is not a red check.
 
 `decide` and `fire` hold no permissions.
 `react` holds only `issues: write`, which GitHub documents as the permission for adding a reaction to an issue or pull request comment.
-Only one `fire` runs per pull request at a time, whichever kind of review request started it: a second waits rather than cancelling the first. If a third arrives while the second is still waiting, GitHub's concurrency rules replace the second with it, and the replaced run sends nothing.
+Only one `fire` runs per pull request at a time, whichever kind of review request started it: a second waits rather than cancelling the first. If a third arrives while the second is still waiting, GitHub's concurrency rules replace the second with it, and the replaced run sends nothing, and its `fire` job shows as cancelled. This is because the group uses `cancel-in-progress: false`, which keeps only one waiting run. The running one is never cancelled, and the newest request is the one that waits.
 
 ## The request decision
 
@@ -292,8 +296,8 @@ To add a new Python step:
 Both check every Python file in this repository, as written for Python 3.10, and the check fails on any finding.
 Their settings are in `pyproject.toml`, which holds nothing else: this repository is not a Python package.
 
-The files in `steps/` must have type hints on every function, so that mypy checks every call between them.
-A new step file must be added to the list of step files in `pyproject.toml`.
+mypy is strict by default: every function in a new Python file, such as a new step file, must have type hints, so that mypy checks every call between them.
+Only the test files and their harness are exempt, and `pyproject.toml` names them. A new test file fails mypy until it is added there.
 In `tests/`, mypy checks the code inside each function, with or without type hints.
 
 Fix a finding where you can.
@@ -340,7 +344,7 @@ The workflow lockfile, `.github/workflows/actions.lock`, records the exact commi
 It is made by the `gh actions-lock` command and is never edited by hand.
 The lockfile is not committed yet, so `actions-lock` only warns for now.
 Once it is committed, `actions-lock` fails if the lockfile does not match the workflows.
-Either way, its annotation shows the lockfile `gh actions-lock` made from the pull request's workflows.
+Either way, a short annotation points to the job summary, which shows the lockfile `gh actions-lock` made from the pull request's workflows and the changes it made to them. This keeps the annotation under GitHub's size limit.
 Once the base branch has the lockfile, a pull request that deletes it fails the check.
 The check is `.github/scripts/check-lock`, tested by `tests/test_check_lock.py`.
 

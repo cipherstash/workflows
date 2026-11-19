@@ -127,18 +127,15 @@ def send(
                     else:
                         result = (response.status, response.read(read_ok_bytes))
             except urllib.error.HTTPError as answer:
-                if read_ok_bytes is not None:
+                # The status is the answer; a body read below only adds to it.
+                result = (answer.code, b"")
+                try:
+                    if read_ok_bytes is None and read_error_bytes:
+                        result = (answer.code, answer.read(read_error_bytes))
+                    elif read_ok_bytes is None:
+                        signal.setitimer(signal.ITIMER_REAL, 0)
+                finally:
                     answer.close()
-                    result = (answer.code, b"")
-                else:
-                    result = (answer.code, b"")
-                    try:
-                        if read_error_bytes:
-                            result = (answer.code, answer.read(read_error_bytes))
-                        else:
-                            signal.setitimer(signal.ITIMER_REAL, 0)
-                    finally:
-                        answer.close()
     except (OSError, http.client.HTTPException, ValueError, TotalTimeout) as failure:
         if result is None:
             # Only the failure's kind is reported.
