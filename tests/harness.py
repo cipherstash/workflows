@@ -179,8 +179,7 @@ def step_env_names(job, step_id):
     return frozenset(_yq(_step_query(job, step_id) + " | (.env // {}) | keys | .[]").split())
 
 
-def run_step(job, step_id, env, api_url="http://127.0.0.1:9", repository="cipherstash/example", substitutions=None,
-             timeout=20):
+def run_step(job, step_id, env, api_url="http://127.0.0.1:9", substitutions=None, timeout=20):
     """Runs the step with only the given env (plus the runner's own variables) and returns a StepResult.
 
     The step must name a step file; it runs that file, from a copy of steps/ so that the shared helper module is beside
@@ -216,10 +215,10 @@ def run_step(job, step_id, env, api_url="http://127.0.0.1:9", repository="cipher
             (code / name).write_text(source, encoding="utf-8")
         return [sys.executable, str(code / main)]
 
-    return _run(command, env, api_url, repository, timeout)
+    return _run(command, env, api_url, timeout)
 
 
-def run_step_as_written(job, step_id, env, api_url="http://127.0.0.1:9", repository="cipherstash/example", timeout=20):
+def run_step_as_written(job, step_id, env, api_url="http://127.0.0.1:9", timeout=20):
     """Runs the step's run script exactly as the workflow writes it, with bash, and returns a StepResult.
 
     For a step whose script only starts its step file, this checks what the script does around the file, such as when
@@ -240,10 +239,10 @@ def run_step_as_written(job, step_id, env, api_url="http://127.0.0.1:9", reposit
         # The runner's default shell for a run script.
         return ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(path)]
 
-    return _run(command, env, api_url, repository, timeout)
+    return _run(command, env, api_url, timeout)
 
 
-def _run(command, env, api_url, repository, timeout):
+def _run(command, env, api_url, timeout):
     """Runs command(temp directory) with only env plus the runner's own variables, and returns a StepResult."""
     with tempfile.TemporaryDirectory() as temp_name:
         temp = pathlib.Path(temp_name)
@@ -259,7 +258,7 @@ def _run(command, env, api_url, repository, timeout):
             "GITHUB_OUTPUT": str(output_path),
             "GITHUB_STEP_SUMMARY": str(summary_path),
             "GITHUB_API_URL": api_url,
-            "GITHUB_REPOSITORY": repository,
+            "GITHUB_REPOSITORY": "cipherstash/example",
             "RUNNER_TEMP": str(runner_temp),
             **env,
         }
