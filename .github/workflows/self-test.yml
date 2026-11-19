@@ -29,8 +29,9 @@
 #   secret CLAUDE_ROUTINE_INTEGRATION_TEST_TOKEN        the stub routine's bearer token
 #   variable CLAUDE_ROUTINE_INTEGRATION_TEST_TRIGGER_ID  the stub routine's trigger id (`trig_…`); a variable, because a
 #                                                        secret cannot be passed as a reusable workflow's input
-#   secrets CLAUDE_REVIEW_APP_ID, CLAUDE_REVIEW_APP_PRIVATE_KEY  the membership App, used only when the pull request's
-#                                                        author is not the review agent
+#   secrets CLAUDE_REVIEW_APP_ID, CLAUDE_REVIEW_APP_PRIVATE_KEY  the membership App, used for every comment command,
+#                                                        every requested-reviewer request, and a Ready request when
+#                                                        the pull request's author is not the review agent
 name: Self-test
 
 on:
@@ -88,10 +89,11 @@ jobs:
   #
   # For a comment, the condition is a filter only, and lets through nothing the review workflow would skip as not a
   # comment command, so a red test always means something: the first line must be `@cipherstash-agent review`
-  # followed by the end of the comment, a space, a tab or a line break (contains, startsWith and == ignore case, as the
-  # review workflow does). A command with other spacing, such as two spaces, is a command to the review workflow but
-  # is not tested. fromJSON gives the tab and line breaks, which an expression's string cannot hold. Comments by bots
-  # and by the review agent (the stub's reply among them) and comments on closed pull requests start no job, because
+  # followed by the end of the comment, a space, a tab or a line break (startsWith and == ignore case, as the review
+  # workflow does). This holds for ASCII text. GitHub does not document how it compares other letters, so such a
+  # comment could pass here and then end the run red with not-a-command. A command with other spacing, such as two
+  # spaces, is a command to the review workflow but is not tested. fromJSON gives the tab and line breaks, which an
+  # expression's string cannot hold. Comments by bots and by the review agent (the stub's reply among them) and comments on closed pull requests start no job, because
   # the review workflow skips them. There is no author_association test, as in examples/claude-review.yml: a team
   # member whose organisation membership is private shows as CONTRIBUTOR or NONE and would be skipped silently. The
   # review workflow decides, and checks team membership, so a non-member's command starts a run that ends red with

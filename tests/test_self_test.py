@@ -20,8 +20,8 @@ def value(query):
 class Expression:
     """Evaluates a job's `if:` condition as GitHub does, for the little of GitHub's expression language the self-test
     uses: `github.` context paths, string literals, true, false, ==, !=, !, && and || with parentheses, and the
-    functions contains, startsWith, fromJSON and format. As in GitHub, a missing property is null, && and || give one
-    of their operands, and == compares strings ignoring case, as contains and startsWith do."""
+    functions startsWith, fromJSON and format. As in GitHub, a missing property is null, && and || give one
+    of their operands, and == compares strings ignoring case, as startsWith does."""
 
     TOKEN = re.compile(r"\s*(?:(&&|\|\||==|!=|!|\(|\)|,)|'((?:[^']|'')*)'|([A-Za-z_][A-Za-z0-9_.-]*)(?=\s*(\())?)")
 
@@ -121,11 +121,6 @@ class Expression:
 
     @classmethod
     def call(cls, name, arguments):
-        if name == "contains":
-            haystack, needle = arguments
-            if isinstance(haystack, list):
-                return any(cls.same(item, needle) for item in haystack)
-            return cls.text(needle).lower() in cls.text(haystack).lower()
         if name == "startsWith":
             whole, start = arguments
             return cls.text(whole).lower().startswith(cls.text(start).lower())
