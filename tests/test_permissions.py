@@ -4,6 +4,7 @@ A reusable workflow's jobs can hold no more than the job that calls them, and Gi
 any of its jobs asks for more, so the example caller and the self-test must grant exactly what the react job holds.
 """
 
+import pathlib
 import unittest
 
 from harness import ROOT, SELF_TEST, WORKFLOW, _yq
@@ -15,16 +16,16 @@ EXAMPLE = ROOT / "examples" / "claude-review.yml"
 REACT_PERMISSIONS = ["issues=write", "pull-requests=write"]
 
 
-def permissions(path, workflow):
+def permissions(path: str, workflow: pathlib.Path) -> list[str]:
     entries = _yq(f'{path}.permissions | to_entries | map(.key + "=" + .value) | .[]', workflow).split()
     return sorted(entries)
 
 
 class PermissionsTest(unittest.TestCase):
-    def test_the_react_job_can_react_to_a_pull_request_comment(self):
+    def test_the_react_job_can_react_to_a_pull_request_comment(self) -> None:
         self.assertEqual(permissions(".jobs.react", WORKFLOW), REACT_PERMISSIONS)
 
-    def test_the_other_jobs_hold_no_permissions(self):
+    def test_the_other_jobs_hold_no_permissions(self) -> None:
         jobs = _yq(".jobs | keys | .[]").split()
         for job in jobs:
             if job == "react":
@@ -32,11 +33,11 @@ class PermissionsTest(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(_yq(f".jobs.{job}.permissions | length").strip(), "0")
 
-    def test_the_example_caller_grants_what_the_react_job_holds(self):
+    def test_the_example_caller_grants_what_the_react_job_holds(self) -> None:
         self.assertEqual(permissions(".jobs.review", EXAMPLE), REACT_PERMISSIONS)
         self.assertEqual(_yq(".permissions | length", EXAMPLE).strip(), "0")
 
-    def test_the_self_test_grants_what_the_react_job_holds(self):
+    def test_the_self_test_grants_what_the_react_job_holds(self) -> None:
         self.assertEqual(permissions(".jobs.review", SELF_TEST), REACT_PERMISSIONS)
 
 
