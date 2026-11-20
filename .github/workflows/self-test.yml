@@ -123,6 +123,7 @@ jobs:
     # even one that will not run. Only its react job uses it, to add the 👀 reaction to a comment command.
     permissions:
       issues: write
+      pull-requests: write
     uses: $/.github/workflows/claude-review.yml
     with:
       routine-trigger-id: ${{ vars.CLAUDE_ROUTINE_INTEGRATION_TEST_TRIGGER_ID }}
