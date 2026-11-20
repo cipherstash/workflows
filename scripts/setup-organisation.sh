@@ -126,20 +126,29 @@ open_url() {
   fi
 }
 
-# Reads the names of the organisation's secrets into SECRET_NAMES and its variables, as JSON, into VARIABLES.
+# Reads the organisation's secrets (names and visibility) into SECRETS and its variables into VARIABLES, as JSON.
 load_settings() {
-  SECRET_NAMES=$(gh api --paginate "orgs/$org/actions/secrets" | jq -r '.secrets[].name') ||
+  SECRETS=$(gh api --paginate "orgs/$org/actions/secrets" | jq -s '[.[].secrets[]]') ||
     die "Could not list $org's Actions secrets."
   VARIABLES=$(gh api --paginate "orgs/$org/actions/variables" | jq -s '[.[].variables[]]') ||
     die "Could not list $org's Actions variables."
 }
 
 has_secret() {
-  printf '%s\n' "$SECRET_NAMES" | grep -qx -- "$1"
+  printf '%s' "$SECRETS" | jq -e --arg name "$1" 'any(.[]; .name == $name)' >/dev/null
 }
 
 variable_value() {
   printf '%s' "$VARIABLES" | jq -r --arg name "$1" '.[] | select(.name == $name) | .value'
+}
+
+# Reports a problem when the setting $2 (in the JSON list $1) is there but not visible to all repositories.
+check_visibility() {
+  local visibility
+  visibility=$(printf '%s' "$1" | jq -r --arg name "$2" '.[] | select(.name == $name) | .visibility')
+  if [ -n "$visibility" ] && [ "$visibility" != all ]; then
+    report problem "$2 is visible to $visibility repositories only, but the workflow needs it in every repository that calls it. Run this script again and replace it, or change it at https://github.com/organizations/$org/settings/secrets/actions"
+  fi
 }
 
 set_variable() {
@@ -228,6 +237,10 @@ run_check() {
   else
     report problem "$TRIGGER_VARIABLE is $trigger_id, which does not start with trig_"
   fi
+  check_visibility "$VARIABLES" "$CLIENT_ID_VARIABLE"
+  check_visibility "$SECRETS" "$KEY_SECRET"
+  check_visibility "$SECRETS" "$TOKEN_SECRET"
+  check_visibility "$VARIABLES" "$TRIGGER_VARIABLE"
   if has_secret "$OLD_ID_SECRET"; then
     report note "$OLD_ID_SECRET is no longer used by the workflow. Delete it with: gh secret delete $OLD_ID_SECRET --org $org"
   fi
@@ -239,36 +252,42 @@ run_check() {
   return 1
 }
 
-# The newest .pem file in ~/Downloads, preferring one named after the app $1, as GitHub names them.
-newest_pem() {
-  local pattern file best=
-  for pattern in "$1."'*.pem' '*.pem'; do
-    for file in "$HOME"/Downloads/$pattern; do
-      [ -f "$file" ] || continue
-      if [ -z "$best" ] || [ "$file" -nt "$best" ]; then
-        best=$file
-      fi
-    done
-    [ -z "$best" ] || break
+# The newest of the files given, or nothing.
+newest() {
+  local file best=
+  for file in "$@"; do
+    [ -f "$file" ] || continue
+    if [ -z "$best" ] || [ "$file" -nt "$best" ]; then
+      best=$file
+    fi
   done
+  printf '%s' "$best"
+}
+
+# The newest key file GitHub downloaded to ~/Downloads, preferring one named after the app $1. GitHub names them
+# <app>.<date>.private-key.pem.
+newest_pem() {
+  local best
+  best=$(newest "$HOME/Downloads/$1."*.private-key.pem)
+  [ -n "$best" ] || best=$(newest "$HOME"/Downloads/*.private-key.pem)
   printf '%s' "$best"
 }
 
 # Has you generate a new private key for the app $1 on GitHub, and stores the downloaded file as the key secret.
 rotate_key() {
-  local settings="https://github.com/organizations/$org/settings/apps/$1" path
+  local settings="https://github.com/organizations/$org/settings/apps/$1" path delete=n
   open_url "$settings"
   echo "On that page, under \"Private keys\", click \"Generate a private key\". Your browser downloads a .pem file."
   while :; do
     ask "Path to the downloaded .pem file (press Enter for the newest .pem in ~/Downloads)"
     path=$ANSWER
     [ -n "$path" ] || path=$(newest_pem "$1")
-    case "$path" in
-      "~/"*) path="$HOME/${path#\~/}" ;;
-    esac
+    if [ "${path#\~/}" != "$path" ]; then
+      path="$HOME/${path#\~/}"
+    fi
     if [ -z "$path" ]; then
       echo "There is no .pem file in ~/Downloads. Type the file's path."
-    elif [ -f "$path" ] && head -n 1 "$path" | grep -Eq '^-----BEGIN (RSA )?PRIVATE KEY-----'; then
+    elif [ -f "$path" ] && head -n 1 <"$path" | grep -Eq '^-----BEGIN (RSA )?PRIVATE KEY-----'; then
       break
     else
       echo "$path is not a private key file. Type the path of the .pem file GitHub downloaded."
@@ -276,7 +295,11 @@ rotate_key() {
   done
   set_secret "$KEY_SECRET" <"$path"
   echo "Now delete the old key on the same page ($settings): under \"Private keys\", delete every key but the newest. An old key keeps working until it is deleted."
-  if yes_no "Delete $path from this computer now?" y; then
+  # Only a file GitHub downloaded is offered for deletion by default: a key typed by path may be one kept on purpose.
+  case "$path" in
+    "$HOME"/Downloads/*.private-key.pem) delete=y ;;
+  esac
+  if yes_no "Delete $path from this computer now?" "$delete"; then
     rm -f -- "$path"
     echo "Deleted $path."
   fi
@@ -329,7 +352,12 @@ code_from_listener() {
     kill -0 "$listener_pid" 2>/dev/null || break
     sleep 0.1
   done
-  [ -n "$port" ] || die "The listener that catches GitHub's answer did not start."
+  if [ -z "$port" ]; then
+    kill "$listener_pid" 2>/dev/null || true
+    listener_pid=
+    echo "The listener that catches GitHub's answer did not start, so you will paste the address instead."
+    return 1
+  fi
   open_url "http://127.0.0.1:$port/"
   echo "In the browser, check the app's name, then click \"Create GitHub App for $org\". Waiting up to 10 minutes for GitHub..."
   if ! wait "$listener_pid"; then
@@ -343,7 +371,7 @@ code_from_listener() {
 # Gets the manifest flow's code without python3: a page on disk posts the manifest, and you paste the address GitHub
 # sends the browser to, which does not load.
 code_from_paste() {
-  local page="$work_dir/create-app.html" state
+  local page="$work_dir/create-app.html" state pasted_state
   state=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
   printf '%s' "$manifest" | jq -r --arg org "$org" --arg state "$state" '.redirect_url = "http://127.0.0.1:1/callback" |
     @html "<!doctype html><meta charset=utf-8><title>Create the app on GitHub</title><form id=\"f\" method=\"post\" action=\"https://github.com/organizations/\($org)/settings/apps/new?state=\($state)\"><input type=\"hidden\" name=\"manifest\" value=\"\(tojson)\"><p>Sending you to GitHub. If nothing happens, press the button.</p><button type=\"submit\">Create the app on GitHub</button></form><script>document.getElementById(\"f\").submit()</script>"' >"$page"
@@ -352,8 +380,14 @@ code_from_paste() {
   while :; do
     ask "Paste that whole address from the browser's address bar"
     CODE=$(printf '%s' "$ANSWER" | sed -n 's/.*[?&]code=\([A-Za-z0-9_-]*\).*/\1/p')
-    [ -z "$CODE" ] || return 0
-    echo "No code in that address. Paste the whole address, which has ?code= in it."
+    pasted_state=$(printf '%s' "$ANSWER" | sed -n 's/.*[?&]state=\([A-Za-z0-9_-]*\).*/\1/p')
+    if [ -z "$CODE" ]; then
+      echo "No code in that address. Paste the whole address, which has ?code= in it."
+    elif [ "$pasted_state" != "$state" ]; then
+      echo "That address is not from this run of the script. Paste the address the browser went to after this run's page."
+    else
+      return 0
+    fi
   done
 }
 
@@ -368,27 +402,29 @@ create_app() {
   done
   manifest=$(jq -n --arg name "$name" --arg org "$org" '{
     name: $name,
-    url: "https://github.com/cipherstash/workflows",
+    url: ("https://github.com/" + $org),
     description: "Looks up team membership for the Claude review workflow. Needs only Members: read.",
     public: false,
     hook_attributes: {url: ("https://github.com/" + $org), active: false},
     default_permissions: {members: "read"},
     default_events: []
   }')
-  if command -v "$python" >/dev/null 2>&1; then
-    code_from_listener
-  else
+  # The listener needs Python 3.7 or later. Without it, or if it does not start, you paste the address instead.
+  if ! "$python" -c 'import sys; sys.exit(sys.version_info < (3, 7))' >/dev/null 2>&1 || ! code_from_listener; then
     code_from_paste
   fi
   [[ $CODE =~ ^[A-Za-z0-9_-]+$ ]] || die "GitHub's answer had no usable code."
   # The answer holds the private key: it stays in this variable, and goes to gh on stdin.
   conversion=$(gh api -X POST "app-manifests/$CODE/conversions") ||
     die "GitHub did not turn the code into an app. A code works once, within an hour: run this script again."
+  printf '%s' "$conversion" | jq -e '(.pem | type) == "string" and (.client_id | type) == "string"' >/dev/null ||
+    die "GitHub's answer had no private key or client id, so nothing was stored. Delete the app it may have created at https://github.com/organizations/$org/settings/apps and run this script again."
   slug=$(printf '%s' "$conversion" | jq -r .slug)
   client_id=$(printf '%s' "$conversion" | jq -r .client_id)
   echo "Created the app $slug: https://github.com/organizations/$org/settings/apps/$slug"
   set_variable "$CLIENT_ID_VARIABLE" "$client_id"
-  printf '%s' "$conversion" | jq -j .pem | set_secret "$KEY_SECRET"
+  printf '%s' "$conversion" | jq -j .pem | set_secret "$KEY_SECRET" ||
+    die "Could not store the private key. Run this script again, type $slug to use the app, and make it a new key."
   conversion=
   ensure_installed "$slug" "$client_id" new
 }
@@ -414,8 +450,17 @@ use_existing_app() {
       echo "A client id starts with Iv, like Iv23li..."
     done
   fi
-  set_variable "$CLIENT_ID_VARIABLE" "$client_id"
+  if [ "$client_id" = "$(variable_value "$CLIENT_ID_VARIABLE")" ]; then
+    echo "$CLIENT_ID_VARIABLE is already $client_id."
+  else
+    set_variable "$CLIENT_ID_VARIABLE" "$client_id"
+  fi
   ensure_installed "$1" "$client_id"
+  if [ "$client_id" = "$(variable_value "$CLIENT_ID_VARIABLE")" ] && has_secret "$KEY_SECRET" &&
+    yes_no "$KEY_SECRET is already set for this app. Keep it?" y; then
+    echo "Keeping the stored private key."
+    return 0
+  fi
   echo "The secret $KEY_SECRET cannot be read back, so make a new private key for $1."
   rotate_key "$1"
 }
@@ -433,11 +478,18 @@ setup_app() {
       fi
       return 0
     fi
-    echo "$CLIENT_ID_VARIABLE is $client_id, but no app with that client id is installed on $org (or the list of installed apps could not be read)."
+    if [ "$rc" -eq 2 ]; then
+      echo "Could not list the apps installed on $org (that needs an organisation owner, and gh's admin:org scope), so the script cannot tell whether the app with client id $client_id is installed."
+      if yes_no "Keep the membership app as it is?" y; then
+        return 0
+      fi
+    else
+      echo "$CLIENT_ID_VARIABLE is $client_id, but no app with that client id is installed on $org."
+    fi
   else
     echo "The membership app is not set up: $CLIENT_ID_VARIABLE and $KEY_SECRET are not both set."
   fi
-  echo "To use an app that already exists, type its name as in its address (github.com/apps/<name>). To create a new app, press Enter."
+  echo "To use an app that already exists, type its name as in its address (github.com/apps/<name>). To create a new app, press Enter: its client id and key replace any stored now."
   while :; do
     ask "Existing app"
     if [ -z "$ANSWER" ]; then
@@ -504,6 +556,8 @@ case $mode in
       ask "Which app's key? Its name as in its address (github.com/apps/<name>)"
       if [[ $ANSWER =~ ^[A-Za-z0-9-]+$ ]]; then
         slug=$ANSWER
+      else
+        echo "An app's name in its address has only letters, digits and hyphens."
       fi
     done
     rotate_key "$slug"

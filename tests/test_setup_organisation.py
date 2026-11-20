@@ -12,10 +12,15 @@ code, the way GitHub redirects after "Create GitHub App".
 
 import json
 import pathlib
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from harness import ROOT
 
@@ -62,9 +67,11 @@ if args[0] == "api":
     if rest == [f"orgs/{org}/actions/secrets/public-key"]:
         answer({"key_id": "1", "key": "x"}) if state.get("auth_ok", True) else fail("gh: Forbidden (HTTP 403)")
     if rest == [f"orgs/{org}/actions/secrets"]:
-        answer({"secrets": [{"name": n, "visibility": "all"} for n in state["secrets"]]})
+        answer({"secrets": [{"name": n, "visibility": state.get("visibility", {}).get(n, "all")}
+                            for n in state["secrets"]]})
     if rest == [f"orgs/{org}/actions/variables"]:
-        answer({"variables": [{"name": n, "value": v, "visibility": "all"} for n, v in state["variables"].items()]})
+        answer({"variables": [{"name": n, "value": v, "visibility": state.get("visibility", {}).get(n, "all")}
+                              for n, v in state["variables"].items()]})
     if rest == [f"orgs/{org}/installations"]:
         if state.get("installations_fail"):
             fail("gh: Forbidden (HTTP 403)")
@@ -93,34 +100,43 @@ sys.exit(64)
 """
 
 FAKE_OPENER = """#!PYTHON
-import html.parser, os, subprocess, sys, urllib.parse, urllib.request
+import html.parser, json, os, subprocess, sys, urllib.parse, urllib.request
 
 url = sys.argv[1]
 with open(os.environ["FAKE_OPENER_LOG"], "a") as f:
     f.write(url + "\\n")
-if url.startswith("http://127.0.0.1:") and not os.environ.get("FAKE_BROWSER_CHILD"):
-    # Play the browser in the background, so the opener returns at once, as a real one does.
-    subprocess.Popen([sys.executable, __file__, url], env={**os.environ, "FAKE_BROWSER_CHILD": "1"},
-                     start_new_session=True)
-elif os.environ.get("FAKE_BROWSER_CHILD"):
-    page = urllib.request.urlopen(url, timeout=10).read().decode()
 
-    class Form(html.parser.HTMLParser):
-        action = manifest = None
 
-        def handle_starttag(self, tag, attrs):
-            attrs = dict(attrs)
-            if tag == "form":
-                self.action = attrs["action"]
-            if tag == "input" and attrs.get("name") == "manifest":
-                self.manifest = attrs["value"]
+class Form(html.parser.HTMLParser):
+    action = manifest = None
 
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "form":
+            self.action = attrs["action"]
+        if tag == "input" and attrs.get("name") == "manifest":
+            self.manifest = attrs["value"]
+
+
+def keep(page):
     form = Form()
     form.feed(page)
     with open(os.environ["FAKE_BROWSER_FORM"], "w") as f:
         f.write(form.action + "\\n" + form.manifest)
+    return form
+
+
+if url.startswith("file://"):
+    with open(url[len("file://"):]) as f:
+        keep(f.read())
+elif url.startswith("http://127.0.0.1:") and not os.environ.get("FAKE_BROWSER_CHILD"):
+    # Play the browser in the background, so the opener returns at once, as a real one does.
+    subprocess.Popen([sys.executable, __file__, url], env={**os.environ, "FAKE_BROWSER_CHILD": "1"},
+                     start_new_session=True)
+elif os.environ.get("FAKE_BROWSER_CHILD"):
+    form = keep(urllib.request.urlopen(url, timeout=10).read().decode())
     state = urllib.parse.parse_qs(urllib.parse.urlparse(form.action).query)["state"][0]
-    redirect = __import__("json").loads(form.manifest)["redirect_url"]
+    redirect = json.loads(form.manifest)["redirect_url"]
     query = urllib.parse.urlencode({"code": os.environ["FAKE_BROWSER_CODE"], "state": state})
     urllib.request.urlopen(redirect + "?" + query, timeout=10).read()
 """
@@ -192,8 +208,8 @@ class SetupTest(unittest.TestCase):
     def given(self, state):
         self.state_file.write_text(json.dumps(state))
 
-    def run_script(self, *args, answers=(), **env):
-        full = {
+    def env(self, **env):
+        return {
             "PATH": f"{self.bin}:/usr/bin:/bin",
             "HOME": str(self.tmp),
             "FAKE_GH_STATE": str(self.state_file),
@@ -203,11 +219,32 @@ class SetupTest(unittest.TestCase):
             "FAKE_BROWSER_CODE": CODE,
             **env,
         }
+
+    def run_script(self, *args, answers=(), **env):
         stdin = "".join(f"{answer}\n" for answer in answers)
         return subprocess.run(
             ["bash", str(SCRIPT), *args],
-            input=stdin, env=full, capture_output=True, text=True, timeout=60, check=False,
+            input=stdin, env=self.env(**env), capture_output=True, text=True, timeout=60, check=False,
         )
+
+    def run_with_paste(self, before, paste, after, **env):
+        """Runs the script without the listener: types the answers before, waits for the page it opens, then types
+        paste(state), where state is the one the page sends GitHub, and the answers after."""
+        process = subprocess.Popen(
+            ["bash", str(SCRIPT)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=self.env(**{"SETUP_ORGANISATION_PYTHON": "no-such-python", **env}),
+        )
+        if process.stdin is None:
+            self.fail("no stdin")
+        process.stdin.write("".join(f"{answer}\n" for answer in before))
+        process.stdin.flush()
+        deadline = time.monotonic() + 20
+        while not self.form_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        action = self.form_file.read_text().split("\n", 1)[0]
+        state = urllib.parse.parse_qs(urllib.parse.urlparse(action).query)["state"][0]
+        stdout, stderr = process.communicate("".join(f"{answer}\n" for answer in (paste(state), *after)), timeout=60)
+        return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
     def final_state(self):
         return json.loads(self.state_file.read_text())
@@ -330,6 +367,14 @@ class Check(SetupTest):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("gh secret delete CLAUDE_REVIEW_APP_ID --org cipherstash", result.stdout)
 
+    def test_a_setting_not_visible_to_all_repositories_fails(self):
+        self.given(complete_state(visibility={"CLAUDE_ROUTINE_TOKEN": "selected",
+                                              "CLAUDE_ROUTINE_TRIGGER_ID": "private"}))
+        result = self.run_script("--check")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("CLAUDE_ROUTINE_TOKEN is visible to selected repositories only", result.stdout)
+        self.assertIn("CLAUDE_ROUTINE_TRIGGER_ID is visible to private repositories only", result.stdout)
+
     def test_it_checks_another_organisation(self):
         self.given({**complete_state(), "org": "acme"})
         result = self.run_script("--org", "acme", "--check")
@@ -391,22 +436,55 @@ class SetUpAnEmptyOrganisation(SetupTest):
 
     def test_without_python_it_takes_the_pasted_address(self):
         self.given(base_state())
-        pasted = f"http://127.0.0.1:1/callback?code={CODE}&state=whatever"
-        result = self.run_script(answers=("", "", pasted, "", ROUTINE_TOKEN, TRIGGER_ID),
-                                 SETUP_ORGANISATION_PYTHON="no-such-python")
+        result = self.run_with_paste(
+            ("", ""), lambda state: f"http://127.0.0.1:1/callback?code={CODE}&state={state}",
+            ("", ROUTINE_TOKEN, TRIGGER_ID),
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.final_state()["variables"]["CLAUDE_REVIEW_APP_CLIENT_ID"], CLIENT_ID)
+        action, manifest = self.form_file.read_text().split("\n", 1)
+        self.assertTrue(action.startswith("https://github.com/organizations/cipherstash/settings/apps/new?state="))
+        self.assertEqual(json.loads(manifest)["redirect_url"], "http://127.0.0.1:1/callback")
         (page,) = [url for url in self.opened() if url.startswith("file://")]
         # The page held only the manifest, and is removed once the script is done with it.
         self.assertFalse(pathlib.Path(page[len("file://"):]).exists())
 
     def test_a_pasted_address_without_a_code_is_asked_again(self):
         self.given(base_state())
-        pasted = f"http://127.0.0.1:1/callback?code={CODE}&state=s"
-        result = self.run_script(answers=("", "", "http://127.0.0.1:1/oops", pasted, "", ROUTINE_TOKEN, TRIGGER_ID),
-                                 SETUP_ORGANISATION_PYTHON="no-such-python")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.run_with_paste(
+            ("", ""), lambda state: "http://127.0.0.1:1/oops",
+            (f"http://127.0.0.1:1/callback?code={CODE}&state=STATE", "", ROUTINE_TOKEN, TRIGGER_ID),
+        )
         self.assertIn("No code in that address", result.stdout)
+
+    def test_a_pasted_address_from_another_run_is_refused(self):
+        self.given(base_state())
+        result = self.run_with_paste(
+            ("", ""), lambda state: f"http://127.0.0.1:1/callback?code={CODE}&state=0123456789abcdef",
+            (), )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not from this run", result.stdout)
+        self.assertEqual([call for call in self.gh_calls() if "conversions" in " ".join(call["argv"])], [])
+
+    def test_it_uses_the_paste_when_python_is_too_old(self):
+        old = self.bin / "old-python"
+        old.write_text("#!/bin/sh\nexit 1\n")
+        old.chmod(0o755)
+        self.given(base_state())
+        result = self.run_with_paste(
+            ("", ""), lambda state: f"http://127.0.0.1:1/callback?code={CODE}&state={state}",
+            ("", ROUTINE_TOKEN, TRIGGER_ID), SETUP_ORGANISATION_PYTHON=str(old),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_it_stops_when_github_gives_no_key(self):
+        state = base_state()
+        del state["conversion"]["pem"]
+        self.given(state)
+        result = self.run_script(answers=self.ANSWERS)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no private key", result.stderr)
+        self.assertNotIn("CLAUDE_REVIEW_APP_PRIVATE_KEY", self.final_state()["secrets"])
 
     def test_it_keeps_asking_until_the_app_is_installed(self):
         self.given(base_state(install_on_conversion=False))
@@ -425,6 +503,13 @@ class SetUpAgain(SetupTest):
         self.assertIn("is set up and installed", result.stdout)
         self.assertIn("CLAUDE_ROUTINE_TOKEN is already set", result.stdout)
         self.assertIn(f"CLAUDE_ROUTINE_TRIGGER_ID is already {TRIGGER_ID}", result.stdout)
+
+    def test_it_keeps_the_app_when_it_cannot_tell_whether_it_is_installed(self):
+        self.given(complete_state(installations_fail=True))
+        result = self.run_script(answers=("", "", ""))
+        self.assertEqual(self.writes(), [])
+        self.assertIn("Could not list the apps installed on cipherstash", result.stdout)
+        self.assertEqual(self.opened(), [])
 
     def test_it_replaces_only_what_is_asked(self):
         self.given(complete_state())
@@ -470,6 +555,27 @@ class UseAnExistingApp(SetupTest):
         self.assertIn("https://github.com/apps/old-app/installations/new", self.opened())
         self.assertEqual(result.returncode, 1)
 
+    def test_it_keeps_the_stored_key_when_the_app_is_the_one_already_stored(self):
+        # The app was set up, then uninstalled: installing it again needs no new key.
+        self.given(complete_state(installations=[],
+                                  apps={"cipherstash-review-membership": {"client_id": CLIENT_ID,
+                                                                          "permissions": {"members": "read"}}}))
+        result = self.run_script(answers=("cipherstash-review-membership", "skip", "", "", ""))
+        self.assertIn("https://github.com/apps/cipherstash-review-membership/installations/new", self.opened())
+        self.assertEqual(self.writes(), [])
+        self.assertTrue(self.pem.exists())
+        self.assertIn("Keeping the stored private key", result.stdout)
+
+    def test_it_does_not_offer_to_delete_a_key_outside_downloads_by_default(self):
+        elsewhere = self.tmp / "id_rsa"
+        elsewhere.write_text(PEM)
+        self.given(base_state(apps={"old-app": {"client_id": "Iv23liOldApp", "permissions": {"members": "read"}}},
+                              installations=[installed(slug="old-app", client_id="Iv23liOldApp")]))
+        result = self.run_script(answers=("old-app", str(elsewhere), "", ROUTINE_TOKEN, TRIGGER_ID))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(elsewhere.exists())
+        self.assertIn("[y/N]", result.stdout)
+
     def test_it_keeps_the_key_file_when_asked(self):
         self.given(base_state(apps={"old-app": {"client_id": "Iv23liOldApp", "permissions": {"members": "read"}}},
                               installations=[installed(slug="old-app", client_id="Iv23liOldApp")]))
@@ -510,6 +616,67 @@ class RotateKey(SetupTest):
         # --rotate-key only replaces the key, so it succeeds even though the app is not installed.
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("https://github.com/organizations/cipherstash/settings/apps/other", self.opened())
+
+
+class ManifestListener(unittest.TestCase):
+    """scripts/manifest_listener.py on its own: the page it serves, and the callbacks it takes or refuses."""
+
+    def setUp(self):
+        manifest = json.dumps({"name": 'x"><script>alert(1)</script>', "default_permissions": {"members": "read"}})
+        self.process = subprocess.Popen(
+            [sys.executable, "-I", str(ROOT / "scripts" / "manifest_listener.py"), "cipherstash"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.addCleanup(self.stop)
+        if self.process.stdin is None or self.process.stdout is None:
+            self.fail("no pipes")
+        self.process.stdin.write(manifest)
+        self.process.stdin.close()
+        self.base = f"http://127.0.0.1:{self.process.stdout.readline().strip()}"
+
+    def stop(self):
+        if self.process.poll() is None:
+            self.process.kill()
+        self.process.communicate()
+
+    def get(self, path):
+        try:
+            # Always http://127.0.0.1:<port>, the listener's own address.
+            with urllib.request.urlopen(self.base + path, timeout=10) as response:  # noqa: S310
+                return response.status, response.read().decode()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode()
+
+    def state(self):
+        _, page = self.get("/")
+        return page.split("state=", 1)[1].split('"', 1)[0]
+
+    def test_the_page_escapes_the_manifest(self):
+        status, page = self.get("/")
+        self.assertEqual(status, 200)
+        self.assertNotIn("<script>alert", page)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
+        self.assertIn('action="https://github.com/organizations/cipherstash/settings/apps/new?state=', page)
+
+    def test_a_callback_with_the_right_state_prints_the_code(self):
+        status, _ = self.get(f"/callback?code={CODE}&state={self.state()}")
+        self.assertEqual(status, 200)
+        stdout, _ = self.process.communicate(timeout=10)
+        self.assertEqual(self.process.returncode, 0)
+        self.assertEqual(stdout.strip(), CODE)
+
+    def test_a_callback_with_another_state_is_refused(self):
+        for query in ("code=abc&state=wrong", "code=abc&state=%C3%A9", "code=%C3%A9&state=" + self.state(),
+                      "state=" + self.state()):
+            status, _ = self.get(f"/callback?{query}")
+            self.assertEqual(status, 400, query)
+        self.assertIsNone(self.process.poll())
+
+    def test_an_idle_connection_does_not_hold_up_the_page(self):
+        idle = socket.create_connection(("127.0.0.1", int(self.base.rsplit(":", 1)[1])))
+        self.addCleanup(idle.close)
+        status, _ = self.get("/")
+        self.assertEqual(status, 200)
 
 
 if __name__ == "__main__":

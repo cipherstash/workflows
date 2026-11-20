@@ -154,8 +154,9 @@ It installs nothing, and runs with the `bash` that comes with macOS.
 It walks through three things, and says what it is doing at each step:
 
 1. **The membership app.** If the app is set up and installed, it offers to make a new private key, and otherwise leaves it alone. If not, it asks for the name of an existing app to use, or creates a new one:
-   - **A new app** is made with GitHub's app manifest flow. The script opens a page in your browser that sends GitHub the app's settings: private to the organisation, only the "Members: read" permission, and no webhook. You check the name and click "Create GitHub App". GitHub then sends the browser back to a small listener the script runs on `127.0.0.1`, which needs `python3`; without `python3`, you paste the address the browser lands on instead. The script turns GitHub's answer into the app's client id and private key, and stores them without writing the key to disk. It then opens the page to install the app on the organisation.
-   - **An existing app** keeps its name. The script stores its client id, opens its install page if it is not installed, and has you make it a new private key (see below), because a stored key cannot be read back.
+   - **A new app** is made with GitHub's app manifest flow. The script opens a page in your browser that sends GitHub the app's settings: private to the organisation, only the "Members: read" permission, and no webhook. You check the name and click "Create GitHub App". GitHub then sends the browser back to a small listener the script runs on `127.0.0.1`, which needs `python3` 3.7 or later; without it, you paste the address the browser lands on instead, and the script checks that address came from this run. The script turns GitHub's answer into the app's client id and private key, and stores them without writing the key to disk. It then opens the page to install the app on the organisation.
+   - **An existing app** keeps its name. The script stores its client id, and opens its install page if it is not installed. If it is the app already stored, it offers to keep the stored key. Otherwise it has you make the app a new private key (see below), because a stored key cannot be read back.
+   If the script cannot read the list of installed apps, it says so and offers to leave the app as it is.
 2. **The routine's token**, which you paste from the routine's API trigger on claude.ai. It does not show as you type.
 3. **The routine's trigger id** (`trig_…`), from the same place.
 
@@ -171,13 +172,13 @@ It stores these organisation settings, each visible to all of the organisation's
 A setting that is already there is kept unless you say to replace it, so it is safe to run again to change one thing.
 It ends with the check below.
 
-`scripts/setup-organisation.sh --check` changes nothing. It reports which settings are there and whether an app with the stored client id is installed on the organisation, with "Members: read" and not suspended, and exits 1 if anything needs fixing.
+`scripts/setup-organisation.sh --check` changes nothing. It reports which settings are there, whether each is visible to all repositories, and whether an app with the stored client id is installed on the organisation, with "Members: read" and not suspended. It exits 1 if anything needs fixing.
 Reading the list of installed apps needs an organisation owner.
 It also points out the old `CLAUDE_REVIEW_APP_ID` secret, which the workflow no longer uses, with the command that deletes it.
 
 `scripts/setup-organisation.sh --rotate-key` only replaces the app's private key.
 GitHub makes a new key only on the app's settings page, so the script opens it, you click "Generate a private key", and the script stores the `.pem` file your browser downloads.
-It then reminds you to delete the old key on that page, and offers to delete the downloaded file.
+It then reminds you to delete the old key on that page, and offers to delete the file: by default only a file GitHub downloaded to `~/Downloads`, never one you typed the path of.
 This is the only time a key file is on your computer.
 
 The unit tests in `tests/test_setup_organisation.py` run the script against a stand-in `gh` and a stand-in browser.

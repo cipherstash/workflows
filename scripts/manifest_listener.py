@@ -10,8 +10,11 @@ the state the page sent; the listener prints the code on its second line and exi
 more, if no callback with the right state comes within ten minutes.
 
 The code is good for one hour and only once: setup-organisation.sh turns it into the app's client id and private key.
-Nothing else is read from or written to disk.
+Nothing else is read from or written to disk. Runs on Python 3.7 or later, so that the python3 that comes with macOS
+does.
 """
+
+from __future__ import annotations
 
 import html
 import http.server
@@ -25,7 +28,9 @@ from typing import Any
 TIMEOUT_SECONDS = 600
 
 
-class Listener(http.server.HTTPServer):
+class Listener(http.server.ThreadingHTTPServer):
+    # A browser may open a connection it never uses: each request gets its own thread, so one cannot hold up another.
+    daemon_threads = True
     page: bytes
     state: str
     code: str | None = None
@@ -33,6 +38,8 @@ class Listener(http.server.HTTPServer):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     server: Listener
+    # Seconds a connection may sit idle before it is dropped.
+    timeout = 10
 
     def do_GET(self) -> None:
         url = urllib.parse.urlsplit(self.path)
@@ -43,8 +50,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             query = urllib.parse.parse_qs(url.query)
             code = query.get("code", [""])[0]
             state = query.get("state", [""])[0]
-            if code and code.replace("-", "").replace("_", "").isalnum() and secrets.compare_digest(
-                state, self.server.state
+            if code.isascii() and code.replace("-", "").replace("_", "").isalnum() and secrets.compare_digest(
+                state.encode(), self.server.state.encode()
             ):
                 self.server.code = code
                 self.reply(200, page("Done", "<p>GitHub created the app. Go back to the terminal.</p>"))
