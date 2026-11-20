@@ -53,6 +53,7 @@ write_summary() {
   git status --short -- .github/workflows
   printf '%s\n' "$fence"
   if [ -f "$lockfile" ]; then
+    # shellcheck disable=SC2016 # The backticks are Markdown for the job summary, not a command substitution.
     printf '\nSHA-256 of the lockfile it made: `%s`\n\nBase64:\n\n%s\n%s\n%s\n' \
       "$(sha256sum "$lockfile" | cut -d' ' -f1)" "$fence" "$(base64 --wrap=0 "$lockfile")" "$fence"
     printf '\nThe lockfile:\n\n%s\n' "$fence"

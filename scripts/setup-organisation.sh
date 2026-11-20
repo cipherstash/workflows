@@ -167,7 +167,7 @@ set_secret() {
 # installations cannot be listed. An installation that does not carry its app's client id is matched through its app.
 find_installation() {
   local list slug id members suspended
-  INSTALL_SLUG= INSTALL_MEMBERS= INSTALL_SUSPENDED=
+  INSTALL_SLUG='' INSTALL_MEMBERS='' INSTALL_SUSPENDED=''
   list=$(gh api --paginate "orgs/$org/installations" 2>/dev/null |
     jq -r '.installations[] | [.app_slug, .client_id // "", .permissions.members // "", .suspended_at // ""] | join("|")') ||
     return 2
@@ -343,7 +343,7 @@ ensure_installed() {
 # Gets the manifest flow's code with the listener: the browser posts the manifest to GitHub, and GitHub sends it back
 # to the listener with the code.
 code_from_listener() {
-  local out="$work_dir/listener.out" port= _
+  local out="$work_dir/listener.out" port='' _
   printf '%s' "$manifest" | "$python" -I "$script_dir/manifest_listener.py" "$org" >"$out" &
   listener_pid=$!
   for _ in $(seq 1 100); do
@@ -432,7 +432,7 @@ create_app() {
 # Uses the existing app $1: stores its client id, has you install it, and has you make it a new private key, because
 # the key an existing app had cannot be read back.
 use_existing_app() {
-  local app client_id= members
+  local app client_id='' members
   if app=$(gh api "apps/$1" 2>/dev/null); then
     client_id=$(printf '%s' "$app" | jq -r '.client_id // ""')
     members=$(printf '%s' "$app" | jq -r '.permissions.members // ""')
