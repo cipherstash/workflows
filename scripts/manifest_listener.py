@@ -53,8 +53,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if code.isascii() and code.replace("-", "").replace("_", "").isalnum() and secrets.compare_digest(
                 state.encode(), self.server.state.encode()
             ):
-                self.server.code = code
                 self.reply(200, page("Done", "<p>GitHub created the app. Go back to the terminal.</p>"))
+                # Only now, so the listener does not exit while the browser is still being answered.
+                self.server.code = code
                 return
             self.reply(400, page("Not this one", "<p>This address is not the one GitHub was asked to call.</p>"))
             return

@@ -632,6 +632,8 @@ class ManifestListener(unittest.TestCase):
             self.fail("no pipes")
         self.process.stdin.write(manifest)
         self.process.stdin.close()
+        # Before Python 3.13, communicate() fails on a stdin that is already closed.
+        self.process.stdin = None
         self.base = f"http://127.0.0.1:{self.process.stdout.readline().strip()}"
 
     def stop(self):
