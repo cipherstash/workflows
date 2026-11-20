@@ -76,7 +76,7 @@ It pins the reusable workflow to a full commit SHA, with the version in a commen
 
 The example listens to `pull_request` (opened, reopened, ready for review and review requested) and `issue_comment` (created) events.
 A caller copied before the requested reviewer kind existed needs `review_requested` added to its `pull_request` types.
-Its workflow-level permissions are empty, and its calling job grants only `issues: write`, which the reaction needs: a reusable workflow's jobs can never hold more permissions than the job that calls them.
+Its workflow-level permissions are empty, and its calling job grants only `issues: write` and `pull-requests: write`, which the reaction needs: a reusable workflow's jobs can never hold more permissions than the job that calls them.
 Only the reusable workflow's `react` job uses that permission; its other jobs hold none.
 The calling job also has an `if:` that starts the reusable workflow only for comments on pull requests that mention `@cipherstash-agent`, and for review requests for `cipherstash-agent`, to save starting runners for every other comment and request.
 The reusable workflow still checks every rule itself.
@@ -96,9 +96,9 @@ The caller needs these settings, which CipherStash sets once for the whole organ
 | Name | Kind | What it is |
 | --- | --- | --- |
 | `CLAUDE_ROUTINE_TOKEN` | secret | The code-review routine's bearer token. |
-| `CLAUDE_REVIEW_APP_ID` | secret | The id of the membership GitHub App. |
 | `CLAUDE_REVIEW_APP_PRIVATE_KEY` | secret | The membership GitHub App's private key. |
 | `CLAUDE_ROUTINE_TRIGGER_ID` | variable | The routine's trigger id, which starts `trig_`. |
+| `CLAUDE_REVIEW_APP_CLIENT_ID` | variable | The membership GitHub App's client ID, shown on the App's settings page. It is a variable, not a secret, because it is not secret and is passed as an input. |
 
 The membership GitHub App is installed on the organisation with only the "Members: read" permission.
 The workflow uses it to get a short-lived token and look up whether the requester (the pull request's author, the comment's author, or the person who requested the review agent as a reviewer) is in the team.
@@ -109,9 +109,10 @@ The workflow uses it to get a short-lived token and look up whether the requeste
 | --- | --- | --- | --- |
 | `routine-trigger-id` | yes | | The routine's trigger id (`trig_…`). |
 | `team` | no | `developers` | The slug of the team, in the calling repository's organisation, whose members may request a review. |
+| `app-client-id` | yes | | The membership GitHub App's client ID, usually `vars.CLAUDE_REVIEW_APP_CLIENT_ID`. |
 | `review-agent` | no | `cipherstash-agent` | The login of the review agent. |
 
-All three secrets, `CLAUDE_ROUTINE_TOKEN`, `CLAUDE_REVIEW_APP_ID` and `CLAUDE_REVIEW_APP_PRIVATE_KEY`, are required and must be passed explicitly, as the example does.
+Both secrets, `CLAUDE_ROUTINE_TOKEN` and `CLAUDE_REVIEW_APP_PRIVATE_KEY`, are required and must be passed explicitly, as the example does.
 
 The workflow has two outputs, for a caller that checks what happened, such as this repository's [self-test](#self-test):
 
@@ -135,7 +136,8 @@ A run has up to three jobs:
   If the job could not check out its step file, no reaction is added, and the run shows a warning, but the check stays green. A failed checkout also prints its own error annotation, which is not a red check.
 
 `decide` and `fire` hold no permissions.
-`react` holds only `issues: write`, which GitHub documents as the permission for adding a reaction to an issue or pull request comment.
+`react` holds only `issues: write` and `pull-requests: write`.
+GitHub documents `issues: write` as the permission for adding a reaction to an issue or pull request comment, but on a pull request's comment it refused a token with only that (HTTP 403), so the job also holds `pull-requests: write`.
 Only one `fire` runs per pull request at a time, whichever kind of review request started it: a second waits rather than cancelling the first. If a third arrives while the second is still waiting, GitHub's concurrency rules replace the second with it, and the replaced run sends nothing, and its `fire` job shows as cancelled. This is because the group uses `cancel-in-progress: false`, which keeps only one waiting run. The running one is never cancelled, and the newest request is the one that waits.
 
 ## The request decision
@@ -224,7 +226,7 @@ If the report's file was not checked out, the step still writes the `decision-fa
 If the routine call's file was not checked out, the step sends nothing and shows an error.
 If the reaction's file or the helper module was not checked out, or the helper module cannot be loaded, the step adds no reaction and shows a warning.
 
-The `react` job holds only `issues: write`, and no `contents` permission, yet its checkout reads this repository with the job's token.
+The `react` job holds only `issues: write` and `pull-requests: write`, and no `contents` permission, yet its checkout reads this repository with the job's token.
 This relies on this repository being public, as for the `decide` and `fire` jobs, which hold no permissions at all; it is to be confirmed by the first live run (#20).
 
 The routine API's address is fixed in `steps/fire.py`, so no input or event can change where the token goes.
@@ -294,7 +296,7 @@ The stub's reply is a comment on the pull request, as for the other kinds. It st
 | --- | --- | --- |
 | `CLAUDE_ROUTINE_INTEGRATION_TEST_TOKEN` | repository secret | The stub routine's bearer token. |
 | `CLAUDE_ROUTINE_INTEGRATION_TEST_TRIGGER_ID` | repository variable | The stub routine's trigger id, which starts `trig_`. It must be a variable, because a secret cannot be passed as a reusable workflow's input. |
-| `CLAUDE_REVIEW_APP_ID`, `CLAUDE_REVIEW_APP_PRIVATE_KEY` | secrets | The membership GitHub App, passed on with the same names. |
+| `CLAUDE_REVIEW_APP_CLIENT_ID`, `CLAUDE_REVIEW_APP_PRIVATE_KEY` | variable and secret | The membership GitHub App, passed on as the `app-client-id` input and the secret of the same name. |
 
 Pull requests here are usually opened by the review agent, `cipherstash-agent`, whose Ready requests need no membership check, so the test works without the App's secrets.
 A pull request opened by anyone else needs the membership check.

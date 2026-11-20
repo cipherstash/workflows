@@ -47,8 +47,8 @@ def api(path: str, token: str) -> tuple[int, bytes]:
 def look_up(token: str, org: str, team: str, requester: str) -> str:
     if os.environ.get("TOKEN_OUTCOME") != "success" or not token:
         raise LookupFailed(
-            "Could not create the membership App's token: check the CLAUDE_REVIEW_APP_ID and "
-            f"CLAUDE_REVIEW_APP_PRIVATE_KEY secrets, and that the App is installed on {org} with Members: read"
+            "Could not create the membership App's token: check the CLAUDE_REVIEW_APP_CLIENT_ID variable and the "
+            f"CLAUDE_REVIEW_APP_PRIVATE_KEY secret, and that the App is installed on {org} with Members: read"
         )
     if not (ORG_NAME.fullmatch(org) and TEAM_NAME.fullmatch(team) and LOGIN.fullmatch(requester)):
         raise LookupFailed(

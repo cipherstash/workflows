@@ -32,6 +32,10 @@ on:
         description: The slug of the team, in the calling repository's owner organisation, whose members may request a review.
         type: string
         default: developers
+      app-client-id:
+        description: The client ID of the GitHub App, installed on the organisation with only "Members, read", that looks up team membership, usually `vars.CLAUDE_REVIEW_APP_CLIENT_ID`.
+        type: string
+        required: true
       review-agent:
         description: The login of the review agent, the account mentioned in a comment command or requested as a reviewer, whose pull requests are reviewed without a membership lookup and whose comments and reviewer requests never request a review.
         type: string
@@ -40,11 +44,8 @@ on:
       CLAUDE_ROUTINE_TOKEN:
         description: The code-review routine's bearer token.
         required: true
-      CLAUDE_REVIEW_APP_ID:
-        description: The id of the GitHub App, installed on the organisation with only "Members, read", that looks up team membership.
-        required: true
       CLAUDE_REVIEW_APP_PRIVATE_KEY:
-        description: That GitHub App's private key.
+        description: The private key of the GitHub App named by `app-client-id`.
         required: true
     outputs:
       # For a caller that checks what happened, such as this repository's self-test (.github/workflows/self-test.yml).
@@ -142,7 +143,7 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
+          client-id: ${{ inputs.app-client-id }}
           private-key: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-members: read
@@ -270,9 +271,11 @@ jobs:
           exit 1
 
   # Adds a 👀 reaction to a comment command once its request has been sent, so the requester knows it was received.
-  # This is the only job that holds a write permission, and it sees only the decision. Reacting to a pull request's
-  # conversation comment uses the issue-comment reactions endpoint, which GitHub documents as needing "Issues: write".
-  # The calling job must grant `issues: write`, because a reusable workflow's jobs cannot hold more than their caller.
+  # This is the only job that holds write permissions, and it sees only the decision. Reacting to a pull request's
+  # conversation comment uses the issue-comment reactions endpoint. GitHub documents it as needing "Issues: write",
+  # but on a pull request's comment it answered HTTP 403 to a token with only that, in the first live comment command
+  # (run 44665882864), so the job also holds `pull-requests: write`. The calling job must grant both, because a
+  # reusable workflow's jobs cannot hold more than their caller.
   # The checkout is given no contents permission. This relies on this repository being public, as for the decide and
   # fire jobs, which hold no permissions at all; it is to be confirmed by the first live run (#20).
   react:
@@ -282,6 +285,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       issues: write
+      pull-requests: write
     env:
       # Where the checkout step below puts this repository's step files.
       WORKFLOW_FILES: ${{ github.workspace }}/.cipherstash-workflows

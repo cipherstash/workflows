@@ -29,9 +29,10 @@
 #   secret CLAUDE_ROUTINE_INTEGRATION_TEST_TOKEN        the stub routine's bearer token
 #   variable CLAUDE_ROUTINE_INTEGRATION_TEST_TRIGGER_ID  the stub routine's trigger id (`trig_…`); a variable, because a
 #                                                        secret cannot be passed as a reusable workflow's input
-#   secrets CLAUDE_REVIEW_APP_ID, CLAUDE_REVIEW_APP_PRIVATE_KEY  the membership App, used for every comment command,
-#                                                        every requested-reviewer request, and a Ready request when
-#                                                        the pull request's author is not the review agent
+#   variable CLAUDE_REVIEW_APP_CLIENT_ID                 the membership App's client ID, and its private key, used for
+#   secret CLAUDE_REVIEW_APP_PRIVATE_KEY                 every comment command, every requested-reviewer request, and
+#                                                        a Ready request when the pull request's author is not the
+#                                                        review agent
 name: Self-test
 
 on:
@@ -123,12 +124,13 @@ jobs:
     # even one that will not run. Only its react job uses it, to add the 👀 reaction to a comment command.
     permissions:
       issues: write
+      pull-requests: write
     uses: $/.github/workflows/claude-review.yml
     with:
       routine-trigger-id: ${{ vars.CLAUDE_ROUTINE_INTEGRATION_TEST_TRIGGER_ID }}
+      app-client-id: ${{ vars.CLAUDE_REVIEW_APP_CLIENT_ID }}
     secrets:
       CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_INTEGRATION_TEST_TOKEN }}
-      CLAUDE_REVIEW_APP_ID: ${{ secrets.CLAUDE_REVIEW_APP_ID }}
       CLAUDE_REVIEW_APP_PRIVATE_KEY: ${{ secrets.CLAUDE_REVIEW_APP_PRIVATE_KEY }}
 
   # Fails unless the review workflow sent a review request, the comment command (if that is what started the run) got
