@@ -236,6 +236,24 @@ The workflows repository must stay public. A caller's built-in token reads the r
 The unit tests in `tests/` run the same step files, so they test exactly what ships.
 No Python code is written inline in the workflow, and a test fails if a step with `shell: python3 {0}` is added.
 
+## Reviews of this repository's pull requests
+
+This repository's own pull requests get real Claude reviews, like every other repository's.
+[`.github/workflows/code-review.yml`](.github/workflows/code-review.yml) is [`examples/claude-review.yml`](examples/claude-review.yml), copied byte for byte.
+It has a different name because `.github/workflows/claude-review.yml` here is the reusable workflow itself.
+
+It calls the released workflow, pinned by commit, and not this repository's own copy.
+So a pull request that changes the workflow cannot change how that same pull request is reviewed.
+The [self-test](#self-test) tests the pull request's own version instead, against the stub routine.
+
+Both run on the same events, so a pull request here gets a real review and a self-test run.
+A comment command starts both, and both add the same 👀 reaction.
+
+When the example's pin moves to a new release, copy the example over `code-review.yml` in the same pull request.
+`tests/test_own_caller.py` fails until the two files match.
+
+The real review routine must also list `cipherstash/workflows` among its repositories.
+
 ## Self-test
 
 This repository tests its own review workflow on its own pull requests, from start to end.
