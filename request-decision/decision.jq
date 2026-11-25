@@ -66,14 +66,20 @@ def request($kind; $requester; $number; $url):
 # Ready: a non-draft pull request opened or reopened, or a draft marked ready for review. The requester is the
 # author. A pull request the review agent opened is reviewed without a lookup: the agent opens most pull
 # requests, and they need review too.
+# A pull request opened with the review agent already in its Reviewers box also sends a review request for the agent,
+# which the requested reviewer path handles (drafts included), so Ready skips the opening rather than review it twice.
+# Only on opening: marking ready or reopening sends no new review request, so those still fire.
 def ready:
-  .event.pull_request as $pr
+  . as $input
+  | .event.pull_request as $pr
   | request("ready"; $pr.user.login; $pr.number; $pr.html_url) as $fire
   # A payload with no author is not one this decision can act on: there is no one to look up or credit.
   | if $pr.user == null then skip("not-a-review-request")
     elif $pr.draft == true then skip("draft")
     elif $pr.user.type == "Bot" then skip("bot")
     elif fork($pr) then skip("fork")
+    elif .event.action == "opened" and any($pr.requested_reviewers[]?.login; . as $l | $input | is_review_agent($l))
+    then skip("review-agent-requested")
     elif is_review_agent($pr.user.login) then $fire
     else gate($pr.user.login; $fire)
     end;

@@ -61,27 +61,29 @@ Punctuation straight after `review`, as in `@cipherstash-agent review!`, means t
 GitHub does not let you request a pull request's author as its reviewer.
 So on pull requests that `cipherstash-agent` opened, only Ready and the comment command can request a review.
 
-If a pull request is opened with `cipherstash-agent` already requested as a reviewer, GitHub may send both the `opened` event and the review request.
-So the pull request can get two reviews.
-To get one review, open the pull request without requesting the agent, or request it later.
-This is possible, not confirmed.
+If a pull request is opened with `cipherstash-agent` already requested as a reviewer, GitHub sends both the `opened` event and a review request for the agent.
+Ready skips the opening, with the reason `review-agent-requested`, and the review request is the one that fires, so the pull request gets one review.
+The review request works on drafts too, so a draft opened with the agent requested is reviewed as well.
+Only the opening is skipped: marking a pull request ready or reopening it sends no new review request, so Ready still fires then, even with the agent among the reviewers.
+A reviewer added by a CODEOWNERS file may not be in the `opened` event yet, so such a pull request can still get two reviews.
 
 A failed request never turns a pull request's checks red.
 It shows as an error in the workflow run instead.
 
 ### Adding it to a repository
 
-Copy [`examples/claude-review.yml`](examples/claude-review.yml) to `.github/workflows/claude-review.yml` in the repository.
+Copy [`examples/claude-review.yml`](examples/claude-review.yml) to `.github/workflows/claude-review.yml` in the repository, unchanged.
 It pins the reusable workflow to a full commit SHA, with the version in a comment.
 
 The example listens to `pull_request` (opened, reopened, ready for review and review requested) and `issue_comment` (created) events.
 A caller copied before the requested reviewer kind existed needs `review_requested` added to its `pull_request` types.
 Its workflow-level permissions are empty, and its calling job grants only `issues: write` and `pull-requests: write`, which the reaction needs: a reusable workflow's jobs can never hold more permissions than the job that calls them.
 Only the reusable workflow's `react` job uses that permission; its other jobs hold none.
-The calling job also has an `if:` that starts the reusable workflow only for comments on pull requests that mention `@cipherstash-agent`, and for review requests for `cipherstash-agent`, to save starting runners for every other comment and request.
+The calling job also has an `if:` that starts the reusable workflow only for comments on pull requests that start with `@cipherstash-agent`, and for review requests for `cipherstash-agent`, to save starting runners for every other comment and request.
+A comment command must be at the very start of the comment, so a comment that mentions the agent later on starts no run.
 The reusable workflow still checks every rule itself.
 
-For comments, the mention is the only filter: the `if:` does not look at the commenter's `author_association`.
+For comments, the leading mention is the only filter: the `if:` does not look at the commenter's `author_association`.
 GitHub reports `MEMBER` only for people whose membership of the organisation is public, or when the token can see private members, so a team member whose membership is private shows as `CONTRIBUTOR` or `NONE`, and a filter on the association would skip their comment command without any run or message.
 The reusable workflow's team membership check is the gate that decides who may request a review; a comment from anyone else starts a run that ends without a request (see `not-a-team-member` below).
 For `review_requested` events, the `if:` also lets through only requests for `cipherstash-agent`, so a request for another reviewer does not start the workflow. Other `pull_request` events are not filtered.
@@ -195,6 +197,7 @@ Exactly one of:
 | `draft` | The pull request is a draft. Only Ready skips drafts. |
 | `bot` | The requester is a bot. No membership lookup is made. |
 | `review-agent` | The requester is the review agent. No membership lookup is made. Ready does not skip this: it reviews the agent's own pull requests. |
+| `review-agent-requested` | A pull request was opened with the review agent already requested as a reviewer. Only Ready skips this, and only on opening: the review request that GitHub sends with it fires instead, so the pull request is reviewed once. |
 | `fork` | The pull request comes from a fork, or from a fork that was deleted. Comment commands are not skipped for this. |
 | `not-a-team-member` | The requester is not an active member of the team. |
 | `membership-lookup-failed` | Team membership could not be checked: GitHub could not be reached within 30 seconds, answered with an error status or a redirect (the lookup does not follow redirects), or gave an answer that is malformed or larger than 64 KiB. The run shows an error. |
@@ -280,6 +283,8 @@ The test is skipped, and the `skipped` job says why in a notice, for:
 - drafts, when they are opened or reopened. Marking the draft ready for review, or requesting a review from `cipherstash-agent`, runs the test. The review workflow takes a requested reviewer on a draft, so the test does too.
 - pull requests from forks. GitHub gives them none of this repository's secrets, so the stub could not be called.
 - pull requests opened by bots, such as Dependabot. They get none of this repository's secrets either, and the review workflow skips their Ready requests.
+
+A pull request opened with `cipherstash-agent` already in Reviewers starts no job for its `opened` event either: the review request that comes with it runs the test.
 
 A review requested from anyone other than `cipherstash-agent`, or from a team, starts no self-test job at all, not even the `skipped` job, so ordinary review requests add nothing to the pull request's checks.
 
@@ -371,7 +376,9 @@ For those, mark the pull request as a draft and then as ready for review.
 A requested-reviewer request needs the membership check, because the person who requested the review must be a team member.
 If the App's secrets do not reach this repository, it fails with the reason `membership-lookup-failed` (see [Settings](#settings)).
 
-A pull request that is opened with `cipherstash-agent` already in Reviewers sends two events, `opened` and `review_requested`, so it starts two self-test runs.
+A pull request that is opened with `cipherstash-agent` already in Reviewers sends two events, `opened` and `review_requested`.
+The `opened` event starts no self-test job, because the review workflow skips it (`review-agent-requested`); the `review_requested` event runs the test.
+
 Only one request is sent at a time for a pull request, so the second waits. A third request that arrives while the second is waiting replaces the waiting one (see `concurrency` above).
 The replaced run's `verify` job then reports that the request was not sent, because its `fire` job was cancelled. That failure is expected, and the newer run tests the commit.
 

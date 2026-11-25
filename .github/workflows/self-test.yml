@@ -53,10 +53,14 @@ jobs:
   # from anyone but the review agent or on a closed pull request, and any comment, which run neither. The review
   # agent's login must match the review workflow's review-agent input, which this file leaves at its default; a job's
   # condition cannot read that input. GitHub compares strings ignoring case, as the review workflow does, and a team's
-  # request has no requested_reviewer.
+  # request has no requested_reviewer. A pull request opened with the review agent already requested runs neither job:
+  # the review workflow's Ready path skips it (review-agent-requested), and the review request for the agent that
+  # GitHub sends with it runs the test instead.
   skipped:
     if: >-
       github.event_name == 'pull_request'
+      && !(github.event.action == 'opened'
+      && contains(github.event.pull_request.requested_reviewers.*.login, 'cipherstash-agent'))
       && (github.event.action != 'review_requested'
       || (github.event.requested_reviewer.login == 'cipherstash-agent' && github.event.pull_request.state == 'open'))
       && ((github.event.action != 'review_requested' && github.event.pull_request.draft)
@@ -104,6 +108,8 @@ jobs:
   review:
     if: >-
       (github.event_name == 'pull_request'
+      && !(github.event.action == 'opened'
+      && contains(github.event.pull_request.requested_reviewers.*.login, 'cipherstash-agent'))
       && (github.event.action != 'review_requested'
       || (github.event.requested_reviewer.login == 'cipherstash-agent' && github.event.pull_request.state == 'open'))
       && (github.event.action == 'review_requested' || github.event.pull_request.draft == false)

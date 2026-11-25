@@ -19,11 +19,11 @@ def value(query):
 
 class Expression:
     """Evaluates a job's `if:` condition as GitHub does, for the little of GitHub's expression language the self-test
-    uses: `github.` context paths, string literals, true, false, ==, !=, !, && and || with parentheses, and the
-    functions startsWith, fromJSON and format. As in GitHub, a missing property is null, && and || give one
-    of their operands, and == compares strings ignoring case, as startsWith does."""
+    uses: `github.` context paths with `*` object filters, string literals, true, false, ==, !=, !, && and || with
+    parentheses, and the functions startsWith, contains, fromJSON and format. As in GitHub, a missing property is null,
+    && and || give one of their operands, and == compares strings ignoring case, as startsWith and contains do."""
 
-    TOKEN = re.compile(r"\s*(?:(&&|\|\||==|!=|!|\(|\)|,)|'((?:[^']|'')*)'|([A-Za-z_][A-Za-z0-9_.-]*)(?=\s*(\())?)")
+    TOKEN = re.compile(r"\s*(?:(&&|\|\||==|!=|!|\(|\)|,)|'((?:[^']|'')*)'|([A-Za-z_][A-Za-z0-9_.*-]*)(?=\s*(\())?)")
 
     def __init__(self, text, context):
         text = text.strip()
@@ -51,9 +51,16 @@ class Expression:
     def lookup(name, context):
         if name in ("true", "false", "null"):
             return {"true": True, "false": False, "null": None}[name]
-        found = context
+        # A `*` filter gives a list of the property that follows from each item, as GitHub's object filters do.
+        found, filtered = context, False
         for part in name.split("."):
-            found = found.get(part) if isinstance(found, dict) else None
+            if part == "*":
+                items = found if isinstance(found, list) else list(found.values()) if isinstance(found, dict) else []
+                found, filtered = items, True
+            elif filtered:
+                found = [item.get(part) for item in found if isinstance(item, dict)]
+            else:
+                found = found.get(part) if isinstance(found, dict) else None
         return found
 
     def peek(self):
@@ -124,6 +131,11 @@ class Expression:
         if name == "startsWith":
             whole, start = arguments
             return cls.text(whole).lower().startswith(cls.text(start).lower())
+        if name == "contains":
+            search, item = arguments
+            if isinstance(search, list):
+                return any(cls.same(element, item) for element in search)
+            return cls.text(item).lower() in cls.text(search).lower()
         if name == "fromJSON":
             return json.loads(arguments[0])
         if name == "format":
@@ -158,8 +170,11 @@ class Expression:
         return token
 
 
-def event(action="opened", draft=False, fork=False, author_type="User", reviewer=None, team=None, state="open"):
-    """A pull_request event's payload, trimmed to what the jobs' conditions read."""
+def event(
+    action="opened", draft=False, fork=False, author_type="User", reviewer=None, team=None, state="open", requested=()
+):
+    """A pull_request event's payload, trimmed to what the jobs' conditions read. `requested` lists the logins already
+    in the pull request's Reviewers box."""
     payload = {
         "action": action,
         "pull_request": {
@@ -167,6 +182,7 @@ def event(action="opened", draft=False, fork=False, author_type="User", reviewer
             "draft": draft,
             "head": {"repo": {"full_name": "someone/workflows" if fork else REPOSITORY}},
             "user": {"login": "monalisa", "type": author_type},
+            "requested_reviewers": [{"login": login, "type": "User"} for login in requested],
         },
     }
     if reviewer is not None:
@@ -324,6 +340,25 @@ class SelfTestWorkflowTest(unittest.TestCase):
         for action in ("opened", "reopened", "ready_for_review"):
             with self.subTest(action=action):
                 self.assertEqual(jobs_run(event(action)), {"review"})
+
+    def test_opening_a_pull_request_with_the_review_agent_requested_runs_no_job(self):
+        # The review request for the agent that GitHub sends with it runs the test instead, as the review workflow's
+        # Ready path skips the opening (review-agent-requested).
+        for requested in (["cipherstash-agent"], ["monalisa", "CipherStash-Agent"]):
+            for draft in (False, True):
+                with self.subTest(requested=requested, draft=draft):
+                    self.assertEqual(jobs_run(event("opened", draft=draft, requested=requested)), set())
+
+    def test_opening_a_pull_request_with_other_reviewers_requested_runs_the_review_job(self):
+        for requested in (["monalisa"], ["cipherstash-agent-2"]):
+            with self.subTest(requested=requested):
+                self.assertEqual(jobs_run(event("opened", requested=requested)), {"review"})
+
+    def test_marking_ready_or_reopening_with_the_review_agent_requested_runs_the_review_job(self):
+        # No new review request comes with these, so Ready is the only request and is tested.
+        for action in ("reopened", "ready_for_review"):
+            with self.subTest(action=action):
+                self.assertEqual(jobs_run(event(action, requested=["cipherstash-agent"])), {"review"})
 
     def test_a_draft_fork_or_bots_ready_request_runs_only_the_skipped_job(self):
         for action in ("opened", "reopened", "ready_for_review"):
