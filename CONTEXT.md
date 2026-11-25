@@ -9,7 +9,7 @@ A GitHub event that asks for a Claude review of one pull request: the pull reque
 _Avoid_: trigger, review trigger
 
 **Ready**:
-The review request made when a non-draft pull request is opened or reopened, or a draft is marked ready for review.
+The review request made when a non-draft pull request is opened or reopened, or a draft is marked ready for review. A pull request opened with the review agent already requested makes a **Requested reviewer** request instead.
 _Avoid_: auto review
 
 **Comment command**:
