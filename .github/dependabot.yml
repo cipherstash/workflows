@@ -10,6 +10,11 @@ updates:
     # pulled first. Only default-days applies to GitHub Actions. Security updates are not delayed.
     cooldown:
       default-days: 7
+    # This repository's own review caller, .github/workflows/code-review.yml, pins this repository's released
+    # workflow, and must stay identical to examples/claude-review.yml, which Dependabot does not scan. Both are moved to
+    # a new release together, by hand (see the README).
+    ignore:
+      - dependency-name: "cipherstash/workflows"
   # The hashed requirements files for Ruff, mypy and zizmor. Whether Dependabot regenerates their --hash lines is not
   # confirmed, so check each pull request's hashes (see the README).
   - package-ecosystem: "pip"
