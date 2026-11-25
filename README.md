@@ -236,6 +236,30 @@ The workflows repository must stay public. A caller's built-in token reads the r
 The unit tests in `tests/` run the same step files, so they test exactly what ships.
 No Python code is written inline in the workflow, and a test fails if a step with `shell: python3 {0}` is added.
 
+## Reviews of this repository's pull requests
+
+This repository's own pull requests get real Claude reviews, like every other repository's.
+[`.github/workflows/code-review.yml`](.github/workflows/code-review.yml) is [`examples/claude-review.yml`](examples/claude-review.yml), copied byte for byte.
+It has a different name because `.github/workflows/claude-review.yml` here is the reusable workflow itself.
+
+It calls the released workflow, pinned by commit, and not this repository's own copy.
+So a pull request that changes only the reusable workflow is still reviewed by the released version.
+A pull request that changes `code-review.yml` itself can change what reviews it, as in any repository, so read such a change closely.
+The [self-test](#self-test) tests the pull request's own version instead, against the stub routine.
+
+Both listen to the same events, so a pull request here usually gets a real review and a self-test run.
+Their filters differ: the self-test skips some pull requests and comments that still get a real review, such as pull requests from forks.
+Their requests to the routines are queued separately, because the reusable workflow's concurrency group names the calling workflow.
+
+On a comment command, both add the same 👀 reaction as the same bot, and GitHub keeps only one.
+So the self-test's 👀 check passes even if its own reaction failed; `tests/test_react.py` covers the reaction step itself.
+
+When the example's pin moves to a new release, copy the example over `code-review.yml` in the same pull request.
+`tests/test_own_caller.py` fails until the two files match.
+Dependabot does not bump this pin, so the two never drift apart.
+
+The real review routine must list `cipherstash/workflows` among its repositories.
+
 ## Self-test
 
 This repository tests its own review workflow on its own pull requests, from start to end.

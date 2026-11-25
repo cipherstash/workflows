@@ -7,9 +7,7 @@ any of its jobs asks for more, so the example caller and the self-test must gran
 import pathlib
 import unittest
 
-from harness import ROOT, SELF_TEST, WORKFLOW, _yq
-
-EXAMPLE = ROOT / "examples" / "claude-review.yml"
+from harness import EXAMPLE, SELF_TEST, WORKFLOW, _yq
 
 # Adding a reaction to a pull request's conversation comment needs pull-requests: write. With issues: write alone,
 # GitHub answered HTTP 403 on the first live comment command (run 44665882864).

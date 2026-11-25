@@ -7,9 +7,8 @@ Only the private key stays a secret.
 
 import unittest
 
-from harness import ROOT, SELF_TEST, _yq
+from harness import EXAMPLE, SELF_TEST, _yq
 
-EXAMPLE = ROOT / "examples" / "claude-review.yml"
 TOKEN_STEP = '.jobs.decide.steps[] | select(.id == "app-token")'
 
 

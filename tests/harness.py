@@ -34,6 +34,9 @@ WORKFLOW = ROOT / ".github" / "workflows" / "claude-review.yml"
 # This repository's own test of the reusable workflow, whose verify job runs a step file too. Each function below that
 # reads a workflow takes it as workflow, which is the reusable workflow unless a test names this one.
 SELF_TEST = ROOT / ".github" / "workflows" / "self-test.yml"
+# The example caller each repository copies, and this repository's own copy of it (see the README).
+EXAMPLE = ROOT / "examples" / "claude-review.yml"
+OWN_CALLER = ROOT / ".github" / "workflows" / "code-review.yml"
 # Where the step files live in this repository.
 STEPS_DIR = ROOT / "steps"
 # Where the workflow checks out this repository, in the job's workspace. Each job that checks it out names that

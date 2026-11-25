@@ -220,9 +220,11 @@ jobs:
     # have started a session; a third replaces the waiting one. This serialises only the fire request, not the review
     # session it starts, so sessions can overlap.
     # Every kind of review request puts the pull request's number in the same place, so a Ready request and a comment
-    # command for one pull request share a group.
+    # command for one pull request share a group. The group names the calling workflow too (github.workflow is the
+    # caller's name), because groups are shared across workflows: in this repository the self-test and the real
+    # caller both call this workflow for the same pull request, and without it one could cancel the other's request.
     concurrency:
-      group: claude-review-${{ github.repository }}-${{ fromJSON(needs.decide.outputs.decision).pull_request.number }}
+      group: claude-review-${{ github.workflow }}-${{ github.repository }}-${{ fromJSON(needs.decide.outputs.decision).pull_request.number }}
       cancel-in-progress: false
     outputs:
       # "true" only when the routine trigger accepted the request.
