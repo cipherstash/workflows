@@ -1,5 +1,5 @@
 # Asks Claude for a code review of a pull request, using the shared workflow in cipherstash/workflows. Every
-# repository that has the review keeps an identical copy of this file at .github/workflows/claude-review.yml.
+# repository that has the review keeps an identical copy of this file in its .github/workflows directory.
 #
 # Reviews a non-draft pull request when it is opened or reopened, or when a draft is marked ready for review, if its
 # author is a member of the @cipherstash/developers team. A pull request opened with cipherstash-agent already in its

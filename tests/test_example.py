@@ -2,10 +2,8 @@
 
 import unittest
 
-from harness import ROOT, _yq
+from harness import EXAMPLE, _yq
 from test_self_test import COMMANDS, NOT_COMMANDS, Expression, comment_event, context_of, decision_for, event
-
-EXAMPLE = ROOT / "examples" / "claude-review.yml"
 
 
 def runs(payload):
