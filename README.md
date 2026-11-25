@@ -72,17 +72,18 @@ It shows as an error in the workflow run instead.
 
 ### Adding it to a repository
 
-Copy [`examples/claude-review.yml`](examples/claude-review.yml) to `.github/workflows/claude-review.yml` in the repository.
+Copy [`examples/claude-review.yml`](examples/claude-review.yml) to `.github/workflows/claude-review.yml` in the repository, unchanged.
 It pins the reusable workflow to a full commit SHA, with the version in a comment.
 
 The example listens to `pull_request` (opened, reopened, ready for review and review requested) and `issue_comment` (created) events.
 A caller copied before the requested reviewer kind existed needs `review_requested` added to its `pull_request` types.
 Its workflow-level permissions are empty, and its calling job grants only `issues: write` and `pull-requests: write`, which the reaction needs: a reusable workflow's jobs can never hold more permissions than the job that calls them.
 Only the reusable workflow's `react` job uses that permission; its other jobs hold none.
-The calling job also has an `if:` that starts the reusable workflow only for comments on pull requests that mention `@cipherstash-agent`, and for review requests for `cipherstash-agent`, to save starting runners for every other comment and request.
+The calling job also has an `if:` that starts the reusable workflow only for comments on pull requests that start with `@cipherstash-agent`, and for review requests for `cipherstash-agent`, to save starting runners for every other comment and request.
+A comment command must be at the very start of the comment, so a comment that mentions the agent later on starts no run.
 The reusable workflow still checks every rule itself.
 
-For comments, the mention is the only filter: the `if:` does not look at the commenter's `author_association`.
+For comments, the leading mention is the only filter: the `if:` does not look at the commenter's `author_association`.
 GitHub reports `MEMBER` only for people whose membership of the organisation is public, or when the token can see private members, so a team member whose membership is private shows as `CONTRIBUTOR` or `NONE`, and a filter on the association would skip their comment command without any run or message.
 The reusable workflow's team membership check is the gate that decides who may request a review; a comment from anyone else starts a run that ends without a request (see `not-a-team-member` below).
 For `review_requested` events, the `if:` also lets through only requests for `cipherstash-agent`, so a request for another reviewer does not start the workflow. Other `pull_request` events are not filtered.
