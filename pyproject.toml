@@ -50,6 +50,7 @@ module = [
     "test_python_steps",
     "test_report",
     "test_self_test",
+    "test_setup_organisation",
     "test_verify",
 ]
 disallow_untyped_defs = false

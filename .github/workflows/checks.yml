@@ -1,6 +1,6 @@
 # Checks every pull request to this repository, and every push to main: lints and audits the workflows and the example
-# callers, checks the workflow lockfile, lints and type-checks the Python, runs the request decision's saved cases, and
-# runs the unit tests of the reusable workflow's Python steps on Python 3.10, 3.12 and 3.14.
+# callers, lints the shell scripts, checks the workflow lockfile, lints and type-checks the Python, runs the request
+# decision's saved cases, and runs the unit tests of the reusable workflow's Python steps on Python 3.10, 3.12 and 3.14.
 name: Checks
 
 on:
@@ -30,6 +30,20 @@ jobs:
       # which are not under .github/workflows, are linted too.
       - name: actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color .github/workflows/*.yml examples/*.yml
+
+  # Lints the shell scripts that are files of their own, which actionlint does not see: the organisation setup script
+  # and its check-lock neighbour. shellcheck is preinstalled on ubuntu-latest.
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the version
+        run: shellcheck --version
+      - name: shellcheck
+        run: shellcheck --format=gcc scripts/setup-organisation.sh .github/scripts/check-lock
 
   # Audits the workflows, the example callers and the Dependabot configuration for security problems. Fails on any
   # finding, of any severity, with zizmor's default ("regular") persona. zizmor exits with 11 to 14 when it has

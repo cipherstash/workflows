@@ -140,6 +140,52 @@ A run has up to three jobs:
 GitHub documents `issues: write` as the permission for adding a reaction to an issue or pull request comment, but on a pull request's comment it refused a token with only that (HTTP 403), so the job also holds `pull-requests: write`.
 Only one `fire` runs per pull request at a time, whichever kind of review request started it: a second waits rather than cancelling the first. If a third arrives while the second is still waiting, GitHub's concurrency rules replace the second with it, and the replaced run sends nothing, and its `fire` job shows as cancelled. This is because the group uses `cancel-in-progress: false`, which keeps only one waiting run. The running one is never cancelled, and the newest request is the one that waits.
 
+### Setting up an organisation
+
+`scripts/setup-organisation.sh` sets up an organisation for the review workflow: the membership GitHub App and the organisation settings that callers pass to the workflow.
+An owner of the organisation runs it on their own computer:
+
+```sh
+gh auth refresh -h github.com -s admin:org   # once: lets gh manage the organisation's secrets
+scripts/setup-organisation.sh                # sets up cipherstash; --org <name> for another organisation
+```
+
+It needs `gh`, signed in as an owner with the `admin:org` scope, and `jq`.
+It installs nothing, and runs with the `bash` that comes with macOS.
+
+It walks through three things, and says what it is doing at each step:
+
+1. **The membership app.** If the app is set up and installed, it offers to make a new private key, and otherwise leaves it alone. If not, it asks for the name of an existing app to use, or creates a new one:
+   - **A new app** is made with GitHub's app manifest flow. The script opens a page in your browser that sends GitHub the app's settings: private to the organisation, only the "Members: read" permission, and no webhook. You check the name and click "Create GitHub App". GitHub then sends the browser back to a small listener the script runs on `127.0.0.1`, which needs `python3` 3.7 or later; without it, you paste the address the browser lands on instead, and the script checks that address came from this run. The script turns GitHub's answer into the app's client id and private key, and stores them without writing the key to disk. It then opens the page to install the app on the organisation.
+   - **An existing app** keeps its name. The script stores its client id, and opens its install page if it is not installed. If it is the app already stored, it offers to keep the stored key. Otherwise it has you make the app a new private key (see below), because a stored key cannot be read back.
+   If the script cannot read the list of installed apps, it says so and offers to leave the app as it is.
+2. **The routine's token**, which you paste from the routine's API trigger on claude.ai. It does not show as you type.
+3. **The routine's trigger id** (`trig_…`), from the same place.
+
+It stores these organisation settings, each visible to all of the organisation's repositories:
+
+| Name | Kind | What it is |
+| --- | --- | --- |
+| `CLAUDE_REVIEW_APP_CLIENT_ID` | variable | The membership app's client id. It is not secret, so the check below can read it. |
+| `CLAUDE_REVIEW_APP_PRIVATE_KEY` | secret | The membership app's private key. |
+| `CLAUDE_ROUTINE_TOKEN` | secret | The code-review routine's bearer token. |
+| `CLAUDE_ROUTINE_TRIGGER_ID` | variable | The routine's trigger id. |
+
+A setting that is already there is kept unless you say to replace it, so it is safe to run again to change one thing.
+It ends with the check below.
+
+`scripts/setup-organisation.sh --check` changes nothing. It reports which settings are there, whether each is visible to all repositories, and whether an app with the stored client id is installed on the organisation, with "Members: read" and not suspended. It exits 1 if anything needs fixing.
+Reading the list of installed apps needs an organisation owner.
+It also points out the old `CLAUDE_REVIEW_APP_ID` secret, which the workflow no longer uses, with the command that deletes it.
+
+`scripts/setup-organisation.sh --rotate-key` only replaces the app's private key.
+GitHub makes a new key only on the app's settings page, so the script opens it, you click "Generate a private key", and the script stores the `.pem` file your browser downloads.
+It then reminds you to delete the old key on that page, and offers to delete the file: by default only a file GitHub downloaded to `~/Downloads`, never one you typed the path of.
+This is the only time a key file is on your computer.
+
+The unit tests in `tests/test_setup_organisation.py` run the script against a stand-in `gh` and a stand-in browser.
+The steps in GitHub's own pages cannot be tested that way, so the first real run on an organisation is the live test.
+
 ## The request decision
 
 The request decision is the part that reads a GitHub event and decides whether it is a review request to send on.
@@ -383,6 +429,7 @@ On a comment command run, the 👀 from the first attempt is still on the commen
 Every pull request, and every push to `main`, runs these checks:
 
 - `actionlint` over the workflows in this repository and the example callers in `examples/`.
+- `shellcheck` over the shell scripts that are files of their own: `scripts/setup-organisation.sh` and `.github/scripts/check-lock`.
 - `python-checks`, which runs Ruff and mypy over every Python file in this repository. See [Linting and type checking](#linting-and-type-checking).
 - `tests`, once for each of Python 3.10, 3.12 and 3.14, which runs:
   - the unit tests of the Python steps, in `tests/`.
